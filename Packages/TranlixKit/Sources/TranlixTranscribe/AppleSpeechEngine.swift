@@ -183,6 +183,14 @@ public struct AppleSpeechEngine: TranscriptionEngine {
         }
     }
 
+    /// Every locale the system transcriber can handle, as BCP-47 identifiers.
+    ///
+    /// Exposed so a language picker can be checked against reality: offering a variant the
+    /// engine cannot load would only fail at transcription time, long after the choice.
+    public static func supportedLocaleIdentifiers() async -> [String] {
+        await SpeechTranscriber.supportedLocales.map { $0.identifier(.bcp47) }
+    }
+
     /// Maps a requested identifier onto whatever variant this Mac actually has.
     ///
     /// There is no `es-AR`, so a Rioplatense session asks for `es-CL` and this is what finds

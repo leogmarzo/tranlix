@@ -8,14 +8,16 @@ enum SidebarSelection: Hashable {
 
 struct RootView: View {
     let environment: AppEnvironment
+    let settings: SettingsStore
 
     @State private var recorder: RecorderViewModel
     @State private var library: LibraryViewModel
     @State private var selection: SidebarSelection? = .record
     @State private var showRecovery = false
 
-    init(environment: AppEnvironment) {
+    init(environment: AppEnvironment, settings: SettingsStore) {
         self.environment = environment
+        self.settings = settings
         _recorder = State(wrappedValue: RecorderViewModel(environment: environment))
         _library = State(wrappedValue: LibraryViewModel(environment: environment))
     }
@@ -95,7 +97,10 @@ struct RootView: View {
             RecordView(model: recorder)
         case let .session(id):
             if let summary = library.summary(withID: id) {
-                SessionDetailView(summary: summary, store: environment.store)
+                SessionDetailView(
+                    summary: summary, environment: environment, settings: settings
+                )
+                .id(summary.id)
             } else {
                 ContentUnavailableView("Sesión no encontrada", systemImage: "questionmark.folder")
             }

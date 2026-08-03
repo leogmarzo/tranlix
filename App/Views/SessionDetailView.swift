@@ -2,51 +2,54 @@ import AppKit
 import SwiftUI
 import TranlixModel
 import TranlixStore
+import TranlixTranscribe
 
-/// What a finished session looks like before transcription exists.
-///
-/// Deliberately thin: it shows what is actually on disk today — chunks, markers, device
-/// changes — so a recording can be inspected and trusted now. The transcript, speakers and
-/// summary panels land in later milestones.
+/// Everything a finished session has: its audio, its transcript, and what it took to produce.
 struct SessionDetailView: View {
     let summary: SessionSummary
-    let store: SessionStore
 
-    @State private var manifest: SessionManifest?
-    @State private var loadError: String?
+    @State private var model: TranscriptionViewModel
+
+    init(summary: SessionSummary, environment: AppEnvironment, settings: SettingsStore) {
+        self.summary = summary
+        _model = State(
+            wrappedValue: TranscriptionViewModel(environment: environment, settings: settings)
+        )
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 header
-
-                if let manifest {
+                if let manifest = model.manifest {
                     tracks(manifest)
-                    if !manifest.markers.isEmpty { markers(manifest) }
+                    transcription(manifest)
+                    if let transcript = model.transcript {
+                        transcriptSection(transcript, manifest: manifest)
+                    }
                     if !manifest.deviceChanges.isEmpty { deviceChanges(manifest) }
-                    pending
-                } else if let loadError {
-                    Label(loadError, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
                 }
             }
             .padding(32)
-            .frame(maxWidth: 620, alignment: .leading)
+            .frame(maxWidth: 700, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
         .navigationTitle(summary.displayTitle)
-        .task(id: summary.id) { load() }
-    }
-
-    private func load() {
-        do {
-            manifest = try SessionHandle.readManifest(at: summary.layout.manifestURL)
-            loadError = nil
-        } catch {
-            manifest = nil
-            loadError = error.localizedDescription
+        .task(id: summary.id) { await model.load(summary) }
+        .alert(
+            "No se pudo transcribir",
+            isPresented: Binding(
+                get: { model.errorMessage != nil },
+                set: { if !$0 { model.errorMessage = nil } }
+            )
+        ) {
+            Button("Entendido", role: .cancel) { model.errorMessage = nil }
+        } message: {
+            Text(model.errorMessage ?? "")
         }
     }
+
+    // MARK: - Header
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -54,8 +57,13 @@ struct SessionDetailView: View {
                 .font(.largeTitle.weight(.semibold))
             HStack(spacing: 8) {
                 Text(summary.createdAt, format: .dateTime.weekday().day().month().year().hour().minute())
-                Text("·")
-                Text(manifest?.language.displayName ?? "")
+                if let manifest = model.manifest {
+                    Text("·")
+                    Text(manifest.language.displayName)
+                    if let locale = manifest.resolvedLocaleIdentifier {
+                        Text("(\(locale))")
+                    }
+                }
             }
             .font(.callout)
             .foregroundStyle(.secondary)
@@ -67,8 +75,10 @@ struct SessionDetailView: View {
         }
     }
 
+    // MARK: - Tracks
+
     private func tracks(_ manifest: SessionManifest) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("Pistas")
                 .font(.headline)
             ForEach(AudioTrack.allCases, id: \.self) { track in
@@ -79,7 +89,7 @@ struct SessionDetailView: View {
                         systemImage: track == .mic ? "mic" : "speaker.wave.2"
                     )
                     Spacer()
-                    Text(detail(for: info, in: manifest))
+                    Text(description(of: info, in: manifest))
                         .foregroundStyle(.secondary)
                 }
                 .font(.callout)
@@ -87,28 +97,152 @@ struct SessionDetailView: View {
         }
     }
 
-    private func detail(for info: TrackInfo, in manifest: SessionManifest) -> String {
-        guard info.totalFrames > 0 else { return "sin audio" }
-        let seconds = Int(info.duration(sampleRate: manifest.sampleRate))
-        let chunks = info.chunks.count
-        return "\(seconds) s · \(chunks) \(chunks == 1 ? "fragmento" : "fragmentos")"
+    private func description(of info: TrackInfo, in manifest: SessionManifest) -> String {
+        guard info.totalFrames > 0 || info.archive != nil else { return "sin audio" }
+        let seconds = Int(info.archive?.duration ?? info.duration(sampleRate: manifest.sampleRate))
+        let minutes = seconds / 60
+        let length = minutes > 0 ? "\(minutes) min" : "\(seconds) s"
+        return info.archive != nil
+            ? "\(length) · comprimida"
+            : "\(length) · \(info.chunks.count) fragmentos"
     }
 
-    private func markers(_ manifest: SessionManifest) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Marcadores")
+    // MARK: - Transcription
+
+    @ViewBuilder
+    private func transcription(_ manifest: SessionManifest) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Transcripción")
                 .font(.headline)
-            ForEach(manifest.markers) { marker in
-                HStack {
-                    Text(timecode(marker.offset))
-                        .font(.system(.callout, design: .monospaced))
-                    Text(marker.label ?? "—")
-                        .foregroundStyle(marker.label == nil ? .secondary : .primary)
-                    Spacer()
+
+            Picker("Motor", selection: Binding(
+                get: { model.selectedEngine },
+                set: { model.selectedEngine = $0 }
+            )) {
+                ForEach(model.engineStatuses) { status in
+                    Text(status.displayName).tag(status.id)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(model.isRunning || model.engineStatuses.isEmpty)
+
+            if let status = model.engineStatuses.first(where: { $0.id == model.selectedEngine }) {
+                engineNote(status)
+            }
+
+            if let phase = model.phase, model.isRunning {
+                progress(phase)
+            } else {
+                HStack(spacing: 12) {
+                    Button(action: model.start) {
+                        Label(
+                            model.hasTranscriptForSelectedEngine ? "Volver a transcribir" : "Transcribir",
+                            systemImage: "text.bubble"
+                        )
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.canTranscribe || !canRun)
+
+                    if model.transcript != nil, !model.hasTranscriptForSelectedEngine {
+                        // The whole reason both engines exist is to be compared on the same
+                        // audio, so say plainly that switching will produce a second reading.
+                        Text("El transcript actual lo hizo otro motor")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
     }
+
+    private var canRun: Bool {
+        guard let status = model.engineStatuses.first(where: { $0.id == model.selectedEngine })
+        else { return false }
+        if case .unsupported = status.availability { return false }
+        return true
+    }
+
+    @ViewBuilder
+    private func engineNote(_ status: EngineStatus) -> some View {
+        switch status.availability {
+        case .ready:
+            Label("Listo para usar, sin descargas pendientes.", systemImage: "checkmark.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case let .needsDownload(bytes):
+            Label(
+                bytes.map {
+                    "Hay que descargar el modelo (\(ByteCountFormatter.string(fromByteCount: $0, countStyle: .file))). Se descarga solo al transcribir."
+                } ?? "Hay que descargar el modelo de idioma. Se descarga solo al transcribir.",
+                systemImage: "arrow.down.circle"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        case let .unsupported(reason):
+            Label(reason, systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+    }
+
+    private func progress(_ phase: TranscriptionPhase) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ProgressView(value: phase.fraction)
+            HStack {
+                Text(label(for: phase))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Cancelar", action: model.cancel)
+                    .buttonStyle(.link)
+            }
+        }
+    }
+
+    private func label(for phase: TranscriptionPhase) -> String {
+        switch phase {
+        case let .preparingEngine(fraction):
+            "Descargando el modelo… \(Int(fraction * 100))%"
+        case let .transcribing(completed, total, reused):
+            reused > 0
+                ? "Transcribiendo fragmento \(completed) de \(total) · \(reused) reutilizados"
+                : "Transcribiendo fragmento \(completed) de \(total)"
+        case .archiving:
+            "Comprimiendo el audio y verificando antes de borrar los fragmentos…"
+        case .finished:
+            "Listo"
+        }
+    }
+
+    // MARK: - Transcript
+
+    private func transcriptSection(
+        _ transcript: Transcript,
+        manifest: SessionManifest
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Texto")
+                    .font(.headline)
+                Spacer()
+                Text("\(transcript.segments.count) segmentos · \(engineName(transcript.engineID))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            TranscriptView(
+                transcript: transcript,
+                markers: manifest.markers,
+                displayName: model.displayName(forSpeaker:)
+            )
+        }
+    }
+
+    private func engineName(_ id: String) -> String {
+        model.engineStatuses.first { $0.id.rawValue == id }?.displayName ?? id
+    }
+
+    // MARK: - Device changes
 
     private func deviceChanges(_ manifest: SessionManifest) -> some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -126,18 +260,6 @@ struct SessionDetailView: View {
             Text("Una discontinuidad acá es esperable: la captura se reconstruyó sin cortar la sesión.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-        }
-    }
-
-    private var pending: some View {
-        GroupBox {
-            Label(
-                "La transcripción, los hablantes y el resumen llegan en los próximos hitos. El audio ya está guardado y es la fuente de verdad: todo eso se genera después.",
-                systemImage: "clock"
-            )
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .padding(6)
         }
     }
 

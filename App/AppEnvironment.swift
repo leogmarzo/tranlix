@@ -3,6 +3,7 @@ import SwiftUI
 import TranlixCapture
 import TranlixModel
 import TranlixStore
+import TranlixTranscribe
 
 /// Shared wiring: where recordings live, and the one coordinator that owns capture.
 ///
@@ -14,6 +15,10 @@ import TranlixStore
 final class AppEnvironment {
     private(set) var store: SessionStore
     private(set) var coordinator: RecordingCoordinator
+
+    /// Shared so a loaded Whisper model outlives the session that loaded it, instead of
+    /// costing seconds and a gigabyte again on the next one.
+    let engines = TranscriptionEngineRegistry()
 
     /// The recordings folder, remembered between launches.
     var recordingsRoot: URL {

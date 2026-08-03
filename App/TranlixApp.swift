@@ -6,10 +6,11 @@ import TranlixCapture
 struct TranlixApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var environment = AppEnvironment()
+    @State private var settings = SettingsStore()
 
     var body: some Scene {
         WindowGroup {
-            RootView(environment: environment)
+            RootView(environment: environment, settings: settings)
                 .frame(minWidth: 900, minHeight: 620)
                 .task { delegate.coordinator = environment.coordinator }
         }
@@ -19,7 +20,7 @@ struct TranlixApp: App {
         }
 
         Settings {
-            SettingsView(environment: environment)
+            SettingsView(environment: environment, settings: settings)
         }
     }
 }
