@@ -20,7 +20,10 @@ public actor SessionHandle {
 
     /// Applies a change and writes it out. The in-memory copy is only updated once the write
     /// has succeeded, so a failed save never leaves the two out of step.
-    public func update(_ mutate: (inout SessionManifest) throws -> Void) throws {
+    ///
+    /// The closure is `sending` because callers are usually other actors: handing the
+    /// mutation over rather than sharing it is what lets it run here safely.
+    public func update(_ mutate: sending (inout SessionManifest) throws -> Void) throws {
         var updated = manifest
         try mutate(&updated)
         try write(updated)
