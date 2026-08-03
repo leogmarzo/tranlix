@@ -89,6 +89,28 @@ public enum AudioArchiver {
         )
     }
 
+    /// Joins a track's chunks into one AAC file at a caller-chosen destination.
+    ///
+    /// Exposed for the stages that need a whole track in one piece and must not disturb the
+    /// session folder doing it — diarization clusters voices across the entire recording, so
+    /// it cannot be fed chunk by chunk, and it runs on sessions whose archive may not exist
+    /// yet. Unlike `archive`, this neither verifies nor records anything: the caller is
+    /// producing a scratch file, not replacing the source of truth.
+    public static func concatenate(
+        track: AudioTrack,
+        chunks: [ChunkRef],
+        layout: SessionLayout,
+        sampleRate: Double,
+        to destination: URL
+    ) throws {
+        guard !chunks.isEmpty else { throw ArchiveError.nothingToArchive(track) }
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try? FileManager.default.removeItem(at: destination)
+        try encode(chunks: chunks, layout: layout, sampleRate: sampleRate, to: destination)
+    }
+
     private static func encode(
         chunks: [ChunkRef],
         layout: SessionLayout,

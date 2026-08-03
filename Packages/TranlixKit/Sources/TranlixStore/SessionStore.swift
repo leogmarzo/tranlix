@@ -11,6 +11,10 @@ public struct SessionSummary: Sendable, Equatable, Identifiable {
     public var duration: TimeInterval
     public var hasAudio: Bool
 
+    /// Whether voices have been separated. Read from the manifest's diarization record rather
+    /// than from the state, because diarization is optional and runs after `ready`.
+    public var hasSpeakers: Bool
+
     /// Falls back to the folder name when the user never typed a title.
     public var displayTitle: String {
         title.isEmpty ? layout.root.lastPathComponent : title
@@ -145,7 +149,8 @@ public struct SessionStore: Sendable {
             createdAt: manifest.createdAt,
             state: manifest.state,
             duration: manifest.duration,
-            hasAudio: manifest.hasAudio
+            hasAudio: manifest.hasAudio,
+            hasSpeakers: manifest.diarization != nil
         )
     }
 

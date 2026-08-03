@@ -169,13 +169,24 @@ struct SessionManifestTests {
 
     // MARK: - Speakers
 
-    @Test("speaker names come from the manifest and fall back to the raw id")
-    func speakerNamesFallBackToID() {
+    @Test("speaker names come from the manifest, unnamed speakers get a readable label")
+    func speakerNamesFallBackToDefaults() {
         var sut = manifest()
         sut.speakerNames = ["system-1": "Martín"]
 
         #expect(sut.displayName(forSpeaker: "system-1") == "Martín")
-        #expect(sut.displayName(forSpeaker: "system-2") == "system-2")
+        // Never the raw id: it goes in front of the user and into the summary prompt.
+        #expect(sut.displayName(forSpeaker: "system-2") == "Persona 2")
+        #expect(sut.displayName(forSpeaker: SessionManifest.micSpeakerID) == "Yo")
+        #expect(sut.hasCustomName(forSpeaker: "system-1"))
+        #expect(!sut.hasCustomName(forSpeaker: "system-2"))
+    }
+
+    @Test("an id from nowhere is shown as itself rather than mislabelled")
+    func unknownSpeakerIDsShowAsThemselves() {
+        #expect(SessionManifest.defaultDisplayName(forSpeaker: "system-") == "system-")
+        #expect(SessionManifest.defaultDisplayName(forSpeaker: "system-x") == "system-x")
+        #expect(SessionManifest.defaultDisplayName(forSpeaker: "otra-cosa") == "otra-cosa")
     }
 
     @Test("chunk file names are zero-padded and prefixed by track")

@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import TranlixCapture
+import TranlixDiarize
 import TranlixModel
 import TranlixStore
 import TranlixTranscribe
@@ -19,6 +20,9 @@ final class AppEnvironment {
     /// Shared so a loaded Whisper model outlives the session that loaded it, instead of
     /// costing seconds and a gigabyte again on the next one.
     let engines = TranscriptionEngineRegistry()
+
+    /// Shared for the same reason, and because the models are cheap enough to keep resident.
+    let diarizer = FluidAudioDiarizer()
 
     /// The recordings folder, remembered between launches.
     var recordingsRoot: URL {

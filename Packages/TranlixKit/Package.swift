@@ -16,6 +16,7 @@ let package = Package(
                 "TranlixStore",
                 "TranlixCapture",
                 "TranlixTranscribe",
+                "TranlixDiarize",
             ]
         ),
     ],
@@ -24,6 +25,10 @@ let package = Package(
         // whisper.cpp; this is the same model without a C build system to feed, which matters
         // a great deal once the app has to be notarized.
         .package(url: "https://github.com/argmaxinc/WhisperKit", from: "1.0.0"),
+        // Pyannote diarization converted to CoreML. Chosen over sherpa-onnx, which is CPU-only
+        // and has no Swift integration; this runs on the Neural Engine and its offline pipeline
+        // is built for exactly our case, a finished file rather than a live stream.
+        .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.15.5"),
     ],
     targets: [
         .target(name: "TranlixModel"),
@@ -52,6 +57,19 @@ let package = Package(
         .testTarget(
             name: "TranlixTranscribeTests",
             dependencies: ["TranlixTranscribe", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
+        ),
+
+        .target(
+            name: "TranlixDiarize",
+            dependencies: [
+                "TranlixModel",
+                "TranlixStore",
+                .product(name: "FluidAudio", package: "FluidAudio"),
+            ]
+        ),
+        .testTarget(
+            name: "TranlixDiarizeTests",
+            dependencies: ["TranlixDiarize", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
         ),
 
         // Shared test helpers. Deliberately not part of the TranlixKit product, so nothing

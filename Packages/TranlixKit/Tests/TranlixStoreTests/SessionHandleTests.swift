@@ -182,7 +182,7 @@ struct SessionHandleTests {
         }
     }
 
-    @Test("clearing a name falls back to the raw speaker id")
+    @Test("clearing a name falls back to the default label")
     func emptyRenameRemovesTheName() async throws {
         try await withTemporaryRoot { root in
             let handle = try newSession(in: root)
@@ -190,7 +190,7 @@ struct SessionHandleTests {
             try await handle.renameSpeaker(id: "system-1", to: "   ")
 
             #expect(await handle.manifest.speakerNames["system-1"] == nil)
-            #expect(await handle.manifest.displayName(forSpeaker: "system-1") == "system-1")
+            #expect(await handle.manifest.displayName(forSpeaker: "system-1") == "Persona 1")
         }
     }
 

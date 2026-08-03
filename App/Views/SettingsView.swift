@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TranlixDiarize
 import TranlixStore
 import TranlixTranscribe
 
@@ -78,8 +79,11 @@ private struct TranscriptionSettingsPane: View {
 
     @State private var statuses: [EngineStatus] = []
     @State private var downloading: EngineID?
+    @State private var downloadingDiarizer = false
     @State private var downloadFraction: Double = 0
     @State private var errorMessage: String?
+    @State private var diarizerAvailability: DiarizerAvailability = .ready
+    @State private var diarizerBytes: Int64?
 
     var body: some View {
         Form {
@@ -114,6 +118,7 @@ private struct TranscriptionSettingsPane: View {
                 ForEach(statuses) { status in
                     modelRow(status)
                 }
+                diarizerRow
             }
         }
         .formStyle(.grouped)
@@ -149,6 +154,80 @@ private struct TranscriptionSettingsPane: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
+    }
+
+    /// The diarization model, kept in the same list as the transcription ones.
+    ///
+    /// It is not an engine choice — there is one diarizer — but it is a download that takes
+    /// disk, and the place a user looks for "what has this app put on my machine" is here.
+    @ViewBuilder
+    private var diarizerRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Separación de voces (pyannote)")
+                Spacer()
+                if downloading == nil {
+                    HStack(spacing: 10) {
+                        if case .needsDownload = diarizerAvailability {
+                            Button("Descargar") { downloadDiarizer() }
+                        }
+                        if diarizerBytes != nil {
+                            Button("Borrar", role: .destructive) { removeDiarizer() }
+                        }
+                    }
+                } else if downloadingDiarizer {
+                    ProgressView(value: downloadFraction)
+                        .frame(width: 120)
+                }
+            }
+            Text(diarizerNote)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var diarizerNote: String {
+        if downloadingDiarizer { return "Descargando y compilando los modelos…" }
+        if let bytes = diarizerBytes {
+            return "Instalado · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
+        }
+        switch diarizerAvailability {
+        case let .needsDownload(bytes):
+            return bytes.map {
+                "Falta descargar · \(ByteCountFormatter.string(fromByteCount: $0, countStyle: .file))"
+            } ?? "Falta descargar el modelo."
+        case let .unsupported(reason):
+            return reason
+        case .ready:
+            return "Instalado."
+        }
+    }
+
+    private func downloadDiarizer() {
+        downloadingDiarizer = true
+        downloadFraction = 0
+        Task {
+            defer { downloadingDiarizer = false }
+            do {
+                let relay = FractionRelay { downloadFraction = $0 }
+                try await environment.diarizer.prepare(progress: { relay.send($0) })
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            await refresh()
+        }
+    }
+
+    private func removeDiarizer() {
+        Task {
+            do {
+                try await environment.diarizer.removeInstalledModel()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            await refresh()
+        }
     }
 
     @ViewBuilder
@@ -194,6 +273,8 @@ private struct TranscriptionSettingsPane: View {
     private func refresh() async {
         let language = settings.transcription.language(for: .spanish)
         statuses = await environment.engines.statuses(for: language)
+        diarizerAvailability = await environment.diarizer.availability()
+        diarizerBytes = environment.diarizer.installedModelBytes()
     }
 
     private func download(_ id: EngineID) {

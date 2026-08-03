@@ -39,8 +39,7 @@ struct LibraryRow: View {
         case .recorded: "grabada"
         case .transcribing: "transcribiendo"
         case .transcribed: "transcrita"
-        case .diarized: "con hablantes"
-        case .ready: "lista"
+        case .ready: summary.hasSpeakers ? "lista · con hablantes" : "lista"
         case .failed: "con error"
         }
     }

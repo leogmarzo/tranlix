@@ -18,10 +18,12 @@ public enum SessionState: String, Codable, Sendable, CaseIterable {
     /// Every chunk has a transcription result.
     case transcribed
 
-    /// Speakers have been assigned and both tracks merged into one timeline.
-    case diarized
-
     /// Terminal success state: transcript is complete and the audio has been archived.
+    ///
+    /// Diarization is deliberately not a state. It is optional, it runs after this point, and
+    /// it can be re-run forever from the audio — so whether it has happened is answered by
+    /// `manifest.diarization`, which is the thing itself rather than a flag that can drift
+    /// away from it.
     case ready
 
     /// Terminal failure state. The audio is still on disk; the failed stage can be retried.
@@ -37,7 +39,7 @@ public extension SessionState {
         switch self {
         case .recording, .transcribing:
             true
-        case .recorded, .transcribed, .diarized, .ready, .failed:
+        case .recorded, .transcribed, .ready, .failed:
             false
         }
     }

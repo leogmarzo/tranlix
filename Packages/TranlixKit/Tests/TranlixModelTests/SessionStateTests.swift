@@ -11,7 +11,6 @@ struct SessionStateTests {
         #expect(SessionState.recorded.rawValue == "recorded")
         #expect(SessionState.transcribing.rawValue == "transcribing")
         #expect(SessionState.transcribed.rawValue == "transcribed")
-        #expect(SessionState.diarized.rawValue == "diarized")
         #expect(SessionState.ready.rawValue == "ready")
         #expect(SessionState.failed.rawValue == "failed")
     }
@@ -24,7 +23,7 @@ struct SessionStateTests {
 
     @Test("states reached by finishing a stage cleanly do not need recovery")
     func settledStatesDoNotNeedRecovery() {
-        for state in [SessionState.recorded, .transcribed, .diarized, .ready, .failed] {
+        for state in [SessionState.recorded, .transcribed, .ready, .failed] {
             #expect(!state.needsRecovery)
         }
     }
@@ -33,7 +32,7 @@ struct SessionStateTests {
     func terminalStates() {
         #expect(!SessionState.ready.isPipelinePending)
         #expect(!SessionState.failed.isPipelinePending)
-        for state in [SessionState.recording, .recorded, .transcribing, .transcribed, .diarized] {
+        for state in [SessionState.recording, .recorded, .transcribing, .transcribed] {
             #expect(state.isPipelinePending)
         }
     }

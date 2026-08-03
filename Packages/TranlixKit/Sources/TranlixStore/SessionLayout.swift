@@ -31,6 +31,12 @@ public struct SessionLayout: Sendable, Equatable {
     public var transcriptJSONURL: URL { root.appending(path: "transcript.json") }
     public var transcriptMarkdownURL: URL { root.appending(path: "transcript.md") }
 
+    /// Speaker turns for the system track, kept beside the transcript rather than inside it.
+    ///
+    /// Separate because the two are produced by different models and are independently
+    /// re-runnable: re-transcribing must not throw away diarization, and vice versa.
+    public var diarizationURL: URL { root.appending(path: "diarization.json") }
+
     public func chunkURL(track: AudioTrack, index: Int) -> URL {
         chunksDirectory.appending(path: ChunkRef.fileName(track: track, index: index))
     }

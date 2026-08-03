@@ -23,15 +23,35 @@ public enum SpeechSample {
         to url: URL,
         sampleRate: Double = 16000
     ) async throws -> TimeInterval {
-        let utterance = AVSpeechUtterance(string: text)
         guard let voice = voice(for: languageCode) else {
             throw GenerationError.noVoice(languageCode)
         }
-        utterance.voice = voice
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        return try await write(
+            turns: [(text, voice.identifier)], to: url, sampleRate: sampleRate
+        )
+    }
 
-        let buffers = try await synthesize(utterance)
-        guard let first = buffers.first else { throw GenerationError.synthesisProducedNothing }
+    /// Speaks each turn with its own voice into one continuous file.
+    ///
+    /// What diarization needs to be tested at all: two voices that a clustering model can tell
+    /// apart, in a single track, without a checked-in recording of two real people.
+    @discardableResult
+    public static func write(
+        turns: [(text: String, voiceIdentifier: String)],
+        to url: URL,
+        sampleRate: Double = 16000
+    ) async throws -> TimeInterval {
+        var buffers: [AVAudioPCMBuffer] = []
+        for turn in turns {
+            guard let voice = AVSpeechSynthesisVoice(identifier: turn.voiceIdentifier) else {
+                throw GenerationError.noVoice(turn.voiceIdentifier)
+            }
+            let utterance = AVSpeechUtterance(string: turn.text)
+            utterance.voice = voice
+            utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+            buffers += try await synthesize(utterance)
+        }
+        guard !buffers.isEmpty else { throw GenerationError.synthesisProducedNothing }
 
         guard let target = AVAudioFormat(
             commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false
@@ -55,12 +75,22 @@ public enum SpeechSample {
             interleaved: false
         )
 
-        guard let converter = AVAudioConverter(from: first.format, to: target) else {
-            throw GenerationError.synthesisProducedNothing
-        }
+        // One converter per input format, not one for the whole file. Voices from different
+        // synthesis families come back at different sample rates, and reusing the first
+        // voice's converter for the second silently mangles half the audio — which looked
+        // exactly like a diarizer that could not tell two people apart.
+        var converter: AVAudioConverter?
+        var converterInput: AVAudioFormat?
 
         var frames: Int64 = 0
         for buffer in buffers {
+            if converterInput != buffer.format {
+                converter = AVAudioConverter(from: buffer.format, to: target)
+                converterInput = buffer.format
+            }
+            guard let converter else { continue }
+            converter.reset()
+
             let capacity = AVAudioFrameCount(
                 Double(buffer.frameLength) * sampleRate / buffer.format.sampleRate
             ) + 1024
@@ -87,6 +117,20 @@ public enum SpeechSample {
 
         guard frames > 0 else { throw GenerationError.synthesisProducedNothing }
         return Double(frames) / sampleRate
+    }
+
+    /// Distinct Spanish voices this Mac has, most different first.
+    ///
+    /// Different regions before different names: two voices for the same locale can be close
+    /// enough that a diarizer is right to call them one person.
+    public static func spanishVoiceIdentifiers() -> [String] {
+        let spanish = AVSpeechSynthesisVoice.speechVoices()
+            .filter { $0.language.lowercased().hasPrefix("es") }
+        var byLanguage: [String: String] = [:]
+        for voice in spanish where byLanguage[voice.language] == nil {
+            byLanguage[voice.language] = voice.identifier
+        }
+        return byLanguage.keys.sorted().compactMap { byLanguage[$0] }
     }
 
     private static func voice(for languageCode: String) -> AVSpeechSynthesisVoice? {

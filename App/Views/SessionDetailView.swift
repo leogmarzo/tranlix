@@ -9,12 +9,14 @@ struct SessionDetailView: View {
     let summary: SessionSummary
 
     @State private var model: TranscriptionViewModel
+    @State private var speakers: SpeakersViewModel
 
     init(summary: SessionSummary, environment: AppEnvironment, settings: SettingsStore) {
         self.summary = summary
         _model = State(
             wrappedValue: TranscriptionViewModel(environment: environment, settings: settings)
         )
+        _speakers = State(wrappedValue: SpeakersViewModel(environment: environment))
     }
 
     var body: some View {
@@ -24,6 +26,7 @@ struct SessionDetailView: View {
                 if let manifest = model.manifest {
                     tracks(manifest)
                     transcription(manifest)
+                    SpeakersSection(model: speakers, canRun: model.transcript != nil)
                     if let transcript = model.transcript {
                         transcriptSection(transcript, manifest: manifest)
                     }
@@ -35,7 +38,7 @@ struct SessionDetailView: View {
             .frame(maxWidth: .infinity)
         }
         .navigationTitle(summary.displayTitle)
-        .task(id: summary.id) { await model.load(summary) }
+        .task(id: summary.id) { await reload() }
         .alert(
             "No se pudo transcribir",
             isPresented: Binding(
@@ -47,6 +50,31 @@ struct SessionDetailView: View {
         } message: {
             Text(model.errorMessage ?? "")
         }
+        .alert(
+            "No se pudieron separar las voces",
+            isPresented: Binding(
+                get: { speakers.errorMessage != nil },
+                set: { if !$0 { speakers.errorMessage = nil } }
+            )
+        ) {
+            Button("Entendido", role: .cancel) { speakers.errorMessage = nil }
+        } message: {
+            Text(speakers.errorMessage ?? "")
+        }
+    }
+
+    /// Reloads both models from disk.
+    ///
+    /// Diarization rewrites `transcript.json` and renaming rewrites the manifest, so after
+    /// either the transcription model is holding a stale copy of what is on screen.
+    private func reload() async {
+        await model.load(summary)
+        if await speakers.reapplyStoredSpeakers(to: summary) {
+            await model.load(summary)
+        }
+        await speakers.load(summary, manifest: model.manifest, transcript: model.transcript)
+        speakers.onChanged = { Task { await model.load(summary) } }
+        model.onFinished = { Task { await reload() } }
     }
 
     // MARK: - Header

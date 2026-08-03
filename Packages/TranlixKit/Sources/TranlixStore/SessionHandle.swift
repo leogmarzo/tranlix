@@ -143,6 +143,27 @@ public actor SessionHandle {
         return try TranlixJSON.decode(Transcript.self, from: data)
     }
 
+    // MARK: - Diarization
+
+    public func writeDiarization(_ diarization: Diarization) throws {
+        try AtomicFile.write(TranlixJSON.encode(diarization), to: layout.diarizationURL)
+    }
+
+    /// Reads stored speaker turns, or nil when there are none or they cannot be parsed.
+    ///
+    /// Unreadable is treated as absent for the same reason as chunk transcripts: the audio is
+    /// still there, so the cost of being wrong is running the model again.
+    public func readDiarization() -> Diarization? {
+        guard let data = try? Data(contentsOf: layout.diarizationURL) else { return nil }
+        return try? TranlixJSON.decode(Diarization.self, from: data)
+    }
+
+    public func setDiarizationInfo(_ info: DiarizationInfo?) throws {
+        try update { $0.diarization = info }
+    }
+
+    // MARK: - Notes
+
     /// Writes a generated summary into `notas/` and returns where it landed.
     public func writeNote(markdown: String, fileName: String) throws -> URL {
         try FileManager.default.createDirectory(

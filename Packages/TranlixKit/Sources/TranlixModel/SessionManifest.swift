@@ -47,6 +47,9 @@ public struct SessionManifest: Codable, Sendable, Equatable {
     /// Identifier of the engine that produced the current transcript.
     public var transcriptionEngine: String?
 
+    /// What ran over the system track to separate voices, `nil` if nothing has.
+    public var diarization: DiarizationInfo?
+
     public var failure: FailureInfo?
 
     public init(
@@ -63,6 +66,7 @@ public struct SessionManifest: Codable, Sendable, Equatable {
         deviceChanges: [DeviceChangeEvent] = [],
         speakerNames: [String: String] = [:],
         transcriptionEngine: String? = nil,
+        diarization: DiarizationInfo? = nil,
         failure: FailureInfo? = nil
     ) {
         self.schemaVersion = schemaVersion
@@ -78,6 +82,7 @@ public struct SessionManifest: Codable, Sendable, Equatable {
         self.deviceChanges = deviceChanges
         self.speakerNames = speakerNames
         self.transcriptionEngine = transcriptionEngine
+        self.diarization = diarization
         self.failure = failure
     }
 
@@ -108,6 +113,7 @@ public struct SessionManifest: Codable, Sendable, Equatable {
         transcriptionEngine = try container.decodeIfPresent(
             String.self, forKey: .transcriptionEngine
         )
+        diarization = try container.decodeIfPresent(DiarizationInfo.self, forKey: .diarization)
         failure = try container.decodeIfPresent(FailureInfo.self, forKey: .failure)
     }
 }
@@ -162,8 +168,39 @@ public extension SessionManifest {
     /// goes through diarization.
     static let micSpeakerID = "mic"
 
-    /// What to show for a speaker id, falling back to the id itself when unnamed.
+    /// Prefix for voices the diarizer found on the system track: `system-1`, `system-2`, …
+    ///
+    /// Numbered by who speaks first rather than by whatever the model called them internally,
+    /// so the ids stay stable and meaningful across diarizer versions.
+    static let systemSpeakerPrefix = "system-"
+
+    static func systemSpeakerID(_ number: Int) -> String {
+        "\(systemSpeakerPrefix)\(number)"
+    }
+
+    /// What to show for a speaker id.
+    ///
+    /// The name the user typed wins; otherwise a readable default. Falling back to the raw id
+    /// would put `system-2` in front of the user and, worse, into the summary prompt.
     func displayName(forSpeaker id: String) -> String {
-        speakerNames[id] ?? id
+        if let name = speakerNames[id] { return name }
+        return Self.defaultDisplayName(forSpeaker: id)
+    }
+
+    /// The label a speaker carries until someone renames it.
+    static func defaultDisplayName(forSpeaker id: String) -> String {
+        if id == micSpeakerID { return "Yo" }
+        if id.hasPrefix(systemSpeakerPrefix) {
+            let number = id.dropFirst(systemSpeakerPrefix.count)
+            if !number.isEmpty, number.allSatisfy(\.isNumber) {
+                return "Persona \(number)"
+            }
+        }
+        return id
+    }
+
+    /// Whether this speaker still carries its default label.
+    func hasCustomName(forSpeaker id: String) -> Bool {
+        speakerNames[id] != nil
     }
 }
