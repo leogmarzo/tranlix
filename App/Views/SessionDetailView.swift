@@ -10,6 +10,7 @@ struct SessionDetailView: View {
 
     @State private var model: TranscriptionViewModel
     @State private var speakers: SpeakersViewModel
+    @State private var summaries: SummaryViewModel
 
     init(summary: SessionSummary, environment: AppEnvironment, settings: SettingsStore) {
         self.summary = summary
@@ -17,6 +18,9 @@ struct SessionDetailView: View {
             wrappedValue: TranscriptionViewModel(environment: environment, settings: settings)
         )
         _speakers = State(wrappedValue: SpeakersViewModel(environment: environment))
+        _summaries = State(
+            wrappedValue: SummaryViewModel(environment: environment, settings: settings)
+        )
     }
 
     var body: some View {
@@ -27,6 +31,9 @@ struct SessionDetailView: View {
                     tracks(manifest)
                     transcription(manifest)
                     SpeakersSection(model: speakers, canRun: model.transcript != nil)
+                    if model.transcript != nil {
+                        SummarySection(model: summaries)
+                    }
                     if let transcript = model.transcript {
                         transcriptSection(transcript, manifest: manifest)
                     }
@@ -61,6 +68,17 @@ struct SessionDetailView: View {
         } message: {
             Text(speakers.errorMessage ?? "")
         }
+        .alert(
+            "No se pudieron generar las notas",
+            isPresented: Binding(
+                get: { summaries.errorMessage != nil },
+                set: { if !$0 { summaries.errorMessage = nil } }
+            )
+        ) {
+            Button("Entendido", role: .cancel) { summaries.errorMessage = nil }
+        } message: {
+            Text(summaries.errorMessage ?? "")
+        }
     }
 
     /// Reloads both models from disk.
@@ -73,7 +91,17 @@ struct SessionDetailView: View {
             await model.load(summary)
         }
         await speakers.load(summary, manifest: model.manifest, transcript: model.transcript)
-        speakers.onChanged = { Task { await model.load(summary) } }
+        await summaries.load(summary, manifest: model.manifest, transcript: model.transcript)
+        // Renaming a speaker changes the text the summariser would be given, so both the
+        // transcript on screen and the pending prompt have to be rebuilt from disk.
+        speakers.onChanged = {
+            Task {
+                await model.load(summary)
+                await summaries.load(
+                    summary, manifest: model.manifest, transcript: model.transcript
+                )
+            }
+        }
         model.onFinished = { Task { await reload() } }
     }
 

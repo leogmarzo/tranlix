@@ -50,6 +50,14 @@ public struct SessionManifest: Codable, Sendable, Equatable {
     /// What ran over the system track to separate voices, `nil` if nothing has.
     public var diarization: DiarizationInfo?
 
+    /// When the user allowed this session's transcript to be sent to the summariser.
+    ///
+    /// Everything else in this app runs locally; summarising is the one thing that sends a
+    /// recording of a class or a meeting to somebody else's server. The scope accepts that
+    /// tradeoff consciously, and recording the moment it was accepted is what keeps it
+    /// conscious — the confirmation is asked once per session, and it is auditable afterwards.
+    public var transcriptSharedAt: Date?
+
     public var failure: FailureInfo?
 
     public init(
@@ -67,6 +75,7 @@ public struct SessionManifest: Codable, Sendable, Equatable {
         speakerNames: [String: String] = [:],
         transcriptionEngine: String? = nil,
         diarization: DiarizationInfo? = nil,
+        transcriptSharedAt: Date? = nil,
         failure: FailureInfo? = nil
     ) {
         self.schemaVersion = schemaVersion
@@ -83,6 +92,7 @@ public struct SessionManifest: Codable, Sendable, Equatable {
         self.speakerNames = speakerNames
         self.transcriptionEngine = transcriptionEngine
         self.diarization = diarization
+        self.transcriptSharedAt = transcriptSharedAt
         self.failure = failure
     }
 
@@ -114,6 +124,7 @@ public struct SessionManifest: Codable, Sendable, Equatable {
             String.self, forKey: .transcriptionEngine
         )
         diarization = try container.decodeIfPresent(DiarizationInfo.self, forKey: .diarization)
+        transcriptSharedAt = try container.decodeIfPresent(Date.self, forKey: .transcriptSharedAt)
         failure = try container.decodeIfPresent(FailureInfo.self, forKey: .failure)
     }
 }

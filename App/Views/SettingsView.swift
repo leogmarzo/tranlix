@@ -14,6 +14,8 @@ struct SettingsView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
             TranscriptionSettingsPane(environment: environment, settings: settings)
                 .tabItem { Label("Transcripción", systemImage: "text.bubble") }
+            NotesSettingsPane(settings: settings)
+                .tabItem { Label("Notas", systemImage: "sparkles") }
         }
         // Tall enough that the Transcription pane shows its model rows without scrolling.
         // The download and remove buttons live at the bottom of that list, and a window

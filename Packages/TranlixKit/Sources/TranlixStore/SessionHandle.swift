@@ -164,6 +164,14 @@ public actor SessionHandle {
 
     // MARK: - Notes
 
+    /// Records that the user allowed this session's transcript to leave the machine.
+    ///
+    /// Written once and never cleared by the app: it is a record of a decision, not a setting.
+    public func recordTranscriptShared(at date: Date) throws {
+        guard manifest.transcriptSharedAt == nil else { return }
+        try update { $0.transcriptSharedAt = date }
+    }
+
     /// Writes a generated summary into `notas/` and returns where it landed.
     public func writeNote(markdown: String, fileName: String) throws -> URL {
         try FileManager.default.createDirectory(

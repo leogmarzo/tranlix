@@ -17,6 +17,8 @@ let package = Package(
                 "TranlixCapture",
                 "TranlixTranscribe",
                 "TranlixDiarize",
+                "TranlixExport",
+                "TranlixSummarize",
             ]
         ),
     ],
@@ -70,6 +72,21 @@ let package = Package(
         .testTarget(
             name: "TranlixDiarizeTests",
             dependencies: ["TranlixDiarize", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
+        ),
+
+        // Rendering only, and deliberately dependency-free beyond the model: the same
+        // renderer produces the Markdown the user exports and the text sent to be
+        // summarised, so what the model reads is exactly what the user can read.
+        .target(name: "TranlixExport", dependencies: ["TranlixModel"]),
+        .testTarget(
+            name: "TranlixExportTests",
+            dependencies: ["TranlixExport", "TranlixModel"]
+        ),
+
+        .target(name: "TranlixSummarize", dependencies: ["TranlixModel", "TranlixStore"]),
+        .testTarget(
+            name: "TranlixSummarizeTests",
+            dependencies: ["TranlixSummarize", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
         ),
 
         // Shared test helpers. Deliberately not part of the TranlixKit product, so nothing

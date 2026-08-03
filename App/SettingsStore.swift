@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import TranlixModel
+import TranlixSummarize
 import TranlixTranscribe
 
 /// User preferences, kept in `UserDefaults`.
@@ -17,13 +18,25 @@ final class SettingsStore {
         }
     }
 
+    /// Which Claude model writes the notes. Only the choice is stored here — the API key
+    /// lives in the keychain, never in `UserDefaults`.
+    var summaryModel: SummaryModel {
+        didSet {
+            guard summaryModel != oldValue else { return }
+            UserDefaults.standard.set(summaryModel.rawValue, forKey: Self.summaryModelKey)
+        }
+    }
+
     private static let key = "transcriptionSettings"
+    private static let summaryModelKey = "summaryModel"
 
     init() {
         let data = UserDefaults.standard.data(forKey: Self.key)
         transcription = data
             .flatMap { try? JSONDecoder().decode(TranscriptionSettings.self, from: $0) }
             ?? TranscriptionSettings()
+        summaryModel = UserDefaults.standard.string(forKey: Self.summaryModelKey)
+            .flatMap(SummaryModel.init(rawValue:)) ?? .default
     }
 
     private func persist() {
