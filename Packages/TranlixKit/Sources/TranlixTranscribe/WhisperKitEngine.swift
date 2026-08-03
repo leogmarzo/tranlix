@@ -41,6 +41,10 @@ public actor WhisperKitEngine: TranscriptionEngine {
 
     public static let defaultVariant = "openai_whisper-large-v3-v20240930_turbo"
 
+    /// The share of `prepare`'s progress that downloading accounts for. The remainder is the
+    /// model load, which reports nothing and is the part that looks like a freeze.
+    public static let downloadShare = 0.85
+
     public static var defaultModelsDirectory: URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first ?? URL(filePath: NSTemporaryDirectory())
@@ -113,14 +117,21 @@ public actor WhisperKitEngine: TranscriptionEngine {
                 _ = try await WhisperKit.download(
                     variant: variant,
                     downloadBase: modelsDirectory,
-                    progressCallback: { progress($0.fractionCompleted) }
+                    // Downloading is only most of the job, so it only gets most of the bar.
+                    // What follows is a Neural Engine compile that reports nothing and takes
+                    // its own minute, and a bar sitting at 100% through it looks like a hang.
+                    progressCallback: { progress($0.fractionCompleted * Self.downloadShare) }
                 )
             } catch {
                 throw TranscriptionError.modelUnavailable(error.localizedDescription)
             }
         }
+        progress(Self.downloadShare)
+
         // Loading is part of being prepared: doing it here means the first chunk is not
-        // several seconds slower than the rest for no visible reason.
+        // several seconds slower than the rest for no visible reason. On a cold model this
+        // is where the system compiles for the Neural Engine, which happens in an XPC
+        // service and can take a minute with this process sitting at zero CPU.
         _ = try await kit()
         progress(1)
     }
@@ -173,6 +184,10 @@ public actor WhisperKitEngine: TranscriptionEngine {
             // `es-CL`. It has no notion of variants.
             language: language.whisperLanguageCode,
             detectLanguage: language == .automatic,
+            // Whisper's control tokens default to being left in. Without this the transcript
+            // reads `<|startoftranscript|><|es|><|transcribe|><|12.16|> Buenos días…`, which
+            // is not text anyone can use and would go to the summariser verbatim.
+            skipSpecialTokens: true,
             wordTimestamps: true
         )
 

@@ -122,6 +122,71 @@ extension ProcessInfo {
     }
 }
 
+/// WhisperKit against real audio. Needs the model already downloaded, so it is skipped
+/// rather than failed when it is not — the download is 1.6 GB and not something a test
+/// should start on its own.
+@Suite(
+    "WhisperKit Integration",
+    .enabled(if: ProcessInfo.processInfo.integrationEnabled),
+    .serialized
+)
+struct WhisperKitIntegrationTests {
+    private let spoken = """
+    Buenos días. Hoy vamos a ver la distribución normal y el teorema central del límite.
+    """
+
+    private func sample() async throws -> URL {
+        let url = URL(filePath: NSTemporaryDirectory())
+            .appending(path: "tranlix-whisper-\(UUID().uuidString).caf")
+        try await SpeechSample.write(text: spoken, languageCode: "es-MX", to: url)
+        return url
+    }
+
+    @Test("transcribes Spanish without leaking Whisper's control tokens")
+    func transcribesWithoutSpecialTokens() async throws {
+        let engine = WhisperKitEngine()
+        guard engine.installedModelFolder() != nil else { return }
+
+        let url = try await sample()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let segments = try await engine.transcribe(
+            chunk: url, language: .fixed("es-CL"), track: .system
+        )
+        let text = segments.map(\.text).joined(separator: " ")
+        print("TRANSCRIPT[whisperkit/es]: \(text)")
+
+        #expect(!segments.isEmpty)
+        #expect(text.lowercased().contains("distribución"))
+
+        // The bug this test exists for: Whisper emits control and timestamp tokens inline,
+        // and left in they end up in the transcript and in whatever is sent to summarise it.
+        for token in ["<|startoftranscript|>", "<|es|>", "<|transcribe|>", "<|endoftext|>"] {
+            #expect(!text.contains(token), "el token \(token) se filtró al texto")
+        }
+        #expect(text.firstMatch(of: /<\|[\d.]+\|>/) == nil, "quedaron marcas de tiempo: \(text)")
+    }
+
+    @Test("word timings come back and advance")
+    func wordTimings() async throws {
+        let engine = WhisperKitEngine()
+        guard engine.installedModelFolder() != nil else { return }
+
+        let url = try await sample()
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let words = try await engine.transcribe(
+            chunk: url, language: .fixed("es-CL"), track: .mic
+        ).flatMap(\.words)
+
+        #expect(!words.isEmpty)
+        #expect(zip(words, words.dropFirst()).allSatisfy { $0.start <= $1.start })
+        for word in words {
+            #expect(!word.text.contains("<|"))
+        }
+    }
+}
+
 extension AVAudioFile {
     var duration: TimeInterval {
         Double(length) / processingFormat.sampleRate

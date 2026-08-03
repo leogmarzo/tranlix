@@ -144,7 +144,7 @@ private struct TranscriptionSettingsPane: View {
                     actions(for: status)
                 }
             }
-            Text(note(for: status))
+            Text(downloading == status.id ? preparingNote : note(for: status))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -162,6 +162,17 @@ private struct TranscriptionSettingsPane: View {
             }
         }
         .disabled(downloading != nil)
+    }
+
+    /// What is happening during `prepare`.
+    ///
+    /// Past the download, the system compiles the model for the Neural Engine in its own
+    /// service. The app sits at zero CPU throughout, so without saying so a full progress bar
+    /// for a minute reads as a hang.
+    private var preparingNote: String {
+        downloadFraction < WhisperKitEngine.downloadShare
+            ? "Descargando… \(Int(downloadFraction / WhisperKitEngine.downloadShare * 100))%"
+            : "Compilando el modelo para el Neural Engine. Solo la primera vez, puede tardar un minuto."
     }
 
     private func note(for status: EngineStatus) -> String {
