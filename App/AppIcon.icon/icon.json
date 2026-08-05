@@ -1,0 +1,21 @@
+{
+  "fill" : {
+    "automatic-gradient" : "extended-srgb:0.149,0.141,0.420,1.000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "waveform.svg"
+        }
+      ]
+    },
+    {
+      "layers" : [
+        {
+          "image-name" : "lines.svg"
+        }
+      ]
+    }
+  ]
+}
