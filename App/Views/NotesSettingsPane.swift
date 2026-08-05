@@ -29,8 +29,18 @@ struct NotesSettingsPane: View {
                 } else {
                     // A password field, so the key is not left readable on screen while the
                     // user is sharing it or walking away.
-                    SecureField("sk-ant-…", text: $keyField)
-                        .onSubmit(saveKey)
+                    //
+                    // Wrapped in LabeledContent with an explicit border rather than left as a
+                    // bare `SecureField("sk-ant-…", …)`: inside a grouped Form, SwiftUI takes
+                    // a field's first argument as its *label*, so the hint rendered as static
+                    // text on the left and the editable area sat unbordered to the right of
+                    // it. The field worked and looked like a disabled caption.
+                    LabeledContent("API key") {
+                        SecureField("sk-ant-…", text: $keyField)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 260)
+                            .onSubmit(saveKey)
+                    }
                     HStack {
                         Spacer()
                         Button("Guardar", action: saveKey)
