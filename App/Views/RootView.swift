@@ -1,30 +1,30 @@
 import SwiftUI
 import TranlixStore
 
-enum SidebarSelection: Hashable {
-    case record
-    case session(UUID)
-}
-
 struct RootView: View {
     let environment: AppEnvironment
     let settings: SettingsStore
 
-    @State private var recorder: RecorderViewModel
+    /// Handed down rather than created here: the menu bar item in the `App` scene reads the
+    /// same recorder, and a session with two view models would be a session with two answers
+    /// about whether it is running.
+    let recorder: RecorderViewModel
+
     @State private var library: LibraryViewModel
-    @State private var selection: SidebarSelection? = .record
     @State private var showRecovery = false
 
-    init(environment: AppEnvironment, settings: SettingsStore) {
+    init(environment: AppEnvironment, settings: SettingsStore, recorder: RecorderViewModel) {
         self.environment = environment
         self.settings = settings
-        _recorder = State(wrappedValue: RecorderViewModel(environment: environment))
+        self.recorder = recorder
         _library = State(wrappedValue: LibraryViewModel(environment: environment))
     }
 
     var body: some View {
+        @Bindable var navigation = environment.navigation
+
         NavigationSplitView {
-            sidebar
+            sidebar(selection: $navigation.selection)
         } detail: {
             detail
         }
@@ -52,8 +52,8 @@ struct RootView: View {
         }
     }
 
-    private var sidebar: some View {
-        List(selection: $selection) {
+    private func sidebar(selection: Binding<SidebarSelection?>) -> some View {
+        List(selection: selection) {
             Section {
                 Label("Nueva grabación", systemImage: "record.circle")
                     .tag(SidebarSelection.record)
@@ -71,7 +71,9 @@ struct RootView: View {
                             .contextMenu {
                                 Button("Borrar", role: .destructive) {
                                     library.delete(summary)
-                                    if selection == .session(summary.id) { selection = .record }
+                                    if selection.wrappedValue == .session(summary.id) {
+                                        selection.wrappedValue = .record
+                                    }
                                 }
                             }
                     }
@@ -92,7 +94,7 @@ struct RootView: View {
 
     @ViewBuilder
     private var detail: some View {
-        switch selection {
+        switch environment.navigation.selection {
         case .record, nil:
             RecordView(model: recorder)
         case let .session(id):

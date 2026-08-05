@@ -21,7 +21,12 @@ final class RecorderViewModel {
     private(set) var isPaused = false
 
     private(set) var isBusy = false
-    private(set) var elapsed: TimeInterval = 0
+
+    /// Whole seconds, not the raw interval: everything that shows it shows `HH:MM:SS`, and
+    /// two readers redrawing twelve times a second for a digit that has not changed is pure
+    /// waste. See `startPolling`.
+    private(set) var elapsedSeconds = 0
+
     private(set) var levels: [AudioTrack: Float] = [:]
     private(set) var markerCount = 0
     private(set) var lastSessionFolder: URL?
@@ -77,7 +82,7 @@ final class RecorderViewModel {
 
         notices.removeAll()
         markerCount = 0
-        elapsed = 0
+        elapsedSeconds = 0
         levels = [:]
         silentTracks = []
         let now = Date()
@@ -183,10 +188,13 @@ final class RecorderViewModel {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 let levels = await coordinator.levels
-                let elapsed = await coordinator.elapsed()
+                let seconds = Int(await coordinator.elapsed())
                 guard !Task.isCancelled else { return }
                 self?.levels = levels
-                self?.elapsed = elapsed
+                // Observation notifies on every write, equal value or not, so the guard is
+                // what actually keeps the redraw down to once a second. The levels below it
+                // do need the full 80 ms rate — the meters would stutter otherwise.
+                if self?.elapsedSeconds != seconds { self?.elapsedSeconds = seconds }
                 if self?.isPaused == false { self?.updateSilence() }
                 try? await Task.sleep(for: .milliseconds(80))
             }

@@ -92,7 +92,7 @@ struct RecordView: View {
                         .foregroundStyle(.orange)
                 }
                 Spacer()
-                Text(elapsedText)
+                Text(ElapsedTime.clock(model.elapsedSeconds))
                     .font(.system(.title2, design: .monospaced))
                     .fontWeight(.medium)
                     .foregroundStyle(model.isCapturing ? .primary : .secondary)
@@ -127,11 +127,6 @@ struct RecordView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
-    }
-
-    private var elapsedText: String {
-        let total = Int(model.elapsed)
-        return String(format: "%02d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60)
     }
 
     // MARK: - Notices

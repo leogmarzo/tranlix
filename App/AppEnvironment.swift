@@ -24,6 +24,9 @@ final class AppEnvironment {
     /// Shared for the same reason, and because the models are cheap enough to keep resident.
     let diarizer = FluidAudioDiarizer()
 
+    /// Where the window is pointed, kept outside the window so the menu bar can steer it.
+    let navigation = AppNavigation()
+
     /// The recordings folder, remembered between launches.
     var recordingsRoot: URL {
         didSet {
