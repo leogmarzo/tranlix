@@ -31,7 +31,13 @@ public final class SystemAudioSource: AudioSource, @unchecked Sendable {
     private var outputBuffer: AVAudioPCMBuffer?
     private var sink: (any AudioSink)?
     private var deviceListener: AudioObjectPropertyListenerBlock?
+    private var rateListener: AudioObjectPropertyListenerBlock?
+    private var rateListenerDevice = AudioObjectID(kAudioObjectUnknown)
     private var isRunning = false
+
+    /// Which buffer of an IOProc cycle carries the tap's stream. Established when the graph is
+    /// built, since it follows the output device.
+    private var tapBufferIndex = 0
 
     public init(sampleRate: Double = 16000) throws {
         guard let format = AVAudioFormat(
@@ -119,7 +125,16 @@ public final class SystemAudioSource: AudioSource, @unchecked Sendable {
         }
         aggregateID = aggregate
 
-        try prepareConversion()
+        // The aggregate presents the sub-device's input streams before the tap's, so the tap
+        // is buffer zero only when the output device has no inputs of its own. Getting this
+        // wrong does not fail loudly: a mono sub-device stream divided by the stereo tap's
+        // frame size yields exactly half the frames, and the recording plays at double speed.
+        lock.lock()
+        tapBufferIndex = CoreAudioProperties.inputBufferCount(outputDevice)
+        lock.unlock()
+
+        try prepareConversion(clockedBy: outputDevice)
+        installRateListener(on: outputDevice)
 
         var proc: AudioDeviceIOProcID?
         let procStatus = AudioDeviceCreateIOProcIDWithBlock(&proc, aggregate, ioQueue) {
@@ -146,8 +161,15 @@ public final class SystemAudioSource: AudioSource, @unchecked Sendable {
     }
 
     /// Builds the converter and both reusable buffers from the tap's real format.
-    private func prepareConversion() throws {
-        var asbd = try CoreAudioProperties.tapFormat(tapID)
+    ///
+    /// The tap's own rate is not the last word: the aggregate delivers that stream on the
+    /// clock of the device it was built over, so the device's rate is what the converter has
+    /// to resample from.
+    private func prepareConversion(clockedBy device: AudioObjectID) throws {
+        var asbd = CoreAudioProperties.clocked(
+            try CoreAudioProperties.tapFormat(tapID),
+            at: CoreAudioProperties.nominalSampleRate(device)
+        )
         guard let inputFormat = AVAudioFormat(streamDescription: &asbd) else {
             throw CaptureError.unsupportedFormat("el tap reportó un formato ilegible")
         }
@@ -174,6 +196,8 @@ public final class SystemAudioSource: AudioSource, @unchecked Sendable {
         lock.lock()
         isRunning = false
         lock.unlock()
+
+        removeRateListener()
 
         if aggregateID != AudioObjectID(kAudioObjectUnknown) {
             if let procID {
@@ -206,10 +230,13 @@ public final class SystemAudioSource: AudioSource, @unchecked Sendable {
         let converter = self.converter
         let input = self.inputBuffer
         let output = self.outputBuffer
+        let tapBufferIndex = self.tapBufferIndex
         lock.unlock()
 
         guard let sink, let converter, let input, let output else { return }
-        guard copy(inputData: inputData, into: input) else { return }
+        guard copy(inputData: inputData, into: input, tapBufferIndex: tapBufferIndex) else {
+            return
+        }
 
         guard converter.convertOnce(from: input, into: output),
               let channel = output.floatChannelData?[0]
@@ -222,38 +249,43 @@ public final class SystemAudioSource: AudioSource, @unchecked Sendable {
         )
     }
 
-    /// Copies one IOProc cycle into the reusable input buffer.
+    /// Copies the tap's stream out of one IOProc cycle into the reusable input buffer.
+    ///
+    /// `tapBufferIndex` is where the tap's stream sits in the cycle; everything before it
+    /// belongs to the aggregate's sub-device and is not ours to read.
     ///
     /// Returns false when the cycle carried nothing, which happens routinely while the
     /// machine is silent.
-    private func copy(
+    func copy(
         inputData: UnsafePointer<AudioBufferList>,
-        into buffer: AVAudioPCMBuffer
+        into buffer: AVAudioPCMBuffer,
+        tapBufferIndex: Int
     ) -> Bool {
         let incoming = UnsafeMutableAudioBufferListPointer(
             UnsafeMutablePointer(mutating: inputData)
         )
-        guard incoming.count > 0, let format = buffer.format.streamDescription.pointee as AudioStreamBasicDescription? else {
-            return false
-        }
+        guard tapBufferIndex >= 0, incoming.count > tapBufferIndex else { return false }
+        let format = buffer.format.streamDescription.pointee
 
         let bytesPerFrame = Int(format.mBytesPerFrame)
         guard bytesPerFrame > 0 else { return false }
 
-        let frames = Int(incoming[0].mDataByteSize) / bytesPerFrame
+        let frames = Int(incoming[tapBufferIndex].mDataByteSize) / bytesPerFrame
         guard frames > 0, frames <= Int(buffer.frameCapacity) else { return false }
         buffer.frameLength = AVAudioFrameCount(frames)
 
         if buffer.format.isInterleaved {
             guard let destination = buffer.floatChannelData?[0],
-                  let source = incoming[0].mData
+                  let source = incoming[tapBufferIndex].mData
             else { return false }
             memcpy(destination, source, frames * bytesPerFrame)
         } else {
             guard let channels = buffer.floatChannelData else { return false }
-            let channelCount = min(Int(buffer.format.channelCount), incoming.count)
+            let channelCount = min(
+                Int(buffer.format.channelCount), incoming.count - tapBufferIndex
+            )
             for channel in 0 ..< channelCount {
-                guard let source = incoming[channel].mData else { return false }
+                guard let source = incoming[tapBufferIndex + channel].mData else { return false }
                 memcpy(channels[channel], source, frames * MemoryLayout<Float>.size)
             }
         }
@@ -289,7 +321,45 @@ public final class SystemAudioSource: AudioSource, @unchecked Sendable {
         self.deviceListener = nil
     }
 
+    /// Rebuilds when the output device changes rate underneath the graph.
+    ///
+    /// Same device, different clock: AirPods drop from 48 kHz to 24 kHz the moment their
+    /// microphone is engaged, which is exactly what joining the meeting being recorded does.
+    /// The converter was built to resample from the old rate, so every frame after the switch
+    /// would be resampled by the wrong ratio — and the recording would play back at double
+    /// speed with nothing having visibly failed.
+    private func installRateListener(on device: AudioObjectID) {
+        removeRateListener()
+        var address = CoreAudioProperties.address(kAudioDevicePropertyNominalSampleRate)
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            self?.rebuild { "\($0) cambió de frecuencia" }
+        }
+        rateListener = listener
+        rateListenerDevice = device
+        AudioObjectAddPropertyListenerBlock(device, &address, ioQueue, listener)
+    }
+
+    private func removeRateListener() {
+        guard let rateListener,
+              rateListenerDevice != AudioObjectID(kAudioObjectUnknown)
+        else { return }
+        var address = CoreAudioProperties.address(kAudioDevicePropertyNominalSampleRate)
+        AudioObjectRemovePropertyListenerBlock(
+            rateListenerDevice, &address, ioQueue, rateListener
+        )
+        self.rateListener = nil
+        rateListenerDevice = AudioObjectID(kAudioObjectUnknown)
+    }
+
     private func handleOutputDeviceChange() {
+        rebuild { "salida cambiada a \($0)" }
+    }
+
+    /// Tears the graph down and builds it again around whatever the output is now.
+    ///
+    /// Re-entrant calls are harmless: `teardown` clears `isRunning` before anything else, so a
+    /// listener that fires while the graph is being rebuilt returns here immediately.
+    private func rebuild(_ message: (String) -> String) {
         lock.lock()
         let shouldRebuild = isRunning
         lock.unlock()
@@ -299,7 +369,7 @@ public final class SystemAudioSource: AudioSource, @unchecked Sendable {
 
         let name = (try? CoreAudioProperties.defaultOutputDeviceID())
             .map(CoreAudioProperties.deviceName) ?? "salida de audio"
-        onDeviceChange?("salida cambiada a \(name)")
+        onDeviceChange?(message(name))
 
         do {
             try buildGraph()

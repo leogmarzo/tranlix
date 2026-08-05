@@ -71,6 +71,69 @@ enum CoreAudioProperties {
         return name as String
     }
 
+    /// The rate a device is currently running at, or zero when it cannot be read.
+    static func nominalSampleRate(_ device: AudioObjectID) -> Double {
+        let rate = try? value(
+            kAudioDevicePropertyNominalSampleRate,
+            on: device,
+            default: Float64(0),
+            describedAs: "no se pudo leer la frecuencia del dispositivo"
+        )
+        return rate ?? 0
+    }
+
+    /// The tap's format as the aggregate device actually delivers it.
+    ///
+    /// A tap reports the format it was created for, but an aggregate runs on the clock of its
+    /// main sub-device and hands the tap's stream over at *that* rate. The two disagree
+    /// whenever the output device changes rate underneath: AirPods drop to 24 kHz the moment
+    /// their microphone is engaged — which recording a meeting always does — while the tap goes
+    /// on advertising 48 kHz. Resampling from the advertised rate then uses the wrong ratio,
+    /// and nothing looks wrong until someone plays the recording back at double speed.
+    ///
+    /// A device rate of zero means the property could not be read, and the tap's own rate is
+    /// then the best answer available.
+    static func clocked(
+        _ tap: AudioStreamBasicDescription,
+        at deviceSampleRate: Double
+    ) -> AudioStreamBasicDescription {
+        guard deviceSampleRate > 0, deviceSampleRate != tap.mSampleRate else { return tap }
+        var clocked = tap
+        clocked.mSampleRate = deviceSampleRate
+        return clocked
+    }
+
+    /// How many buffers a device presents on its input scope.
+    ///
+    /// An aggregate device hands its IOProc the input streams of its sub-devices first and the
+    /// tap's stream after them, so this count over the sub-device is exactly the index the
+    /// tap's buffer starts at. Built-in speakers have no inputs and report zero, which is why
+    /// reading buffer zero appears to work right up until the user puts on a headset or joins
+    /// a call through a virtual audio device.
+    ///
+    /// Returns zero when the device reports nothing, which is the same answer as having no
+    /// input streams at all.
+    static func inputBufferCount(_ device: AudioObjectID) -> Int {
+        var address = address(
+            kAudioDevicePropertyStreamConfiguration, scope: kAudioObjectPropertyScopeInput
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr,
+              size > 0
+        else { return 0 }
+
+        let raw = UnsafeMutableRawPointer.allocate(
+            byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, raw) == noErr else {
+            return 0
+        }
+        return UnsafeMutableAudioBufferListPointer(
+            raw.assumingMemoryBound(to: AudioBufferList.self)
+        ).count
+    }
+
     /// The format the tap actually delivers.
     ///
     /// Always read rather than assumed: it follows the output device, so it is 48 kHz stereo
