@@ -5,6 +5,7 @@ import TranlixModel
 struct TranscriptView: View {
     let transcript: Transcript
     let markers: [Marker]
+    let pauses: [PauseEvent]
     let displayName: (String?) -> String?
 
     var body: some View {
@@ -18,6 +19,8 @@ struct TranscriptView: View {
                     )
                 case .marker:
                     MarkerRow(offset: entry.start)
+                case let .pause(duration):
+                    PauseRow(duration: duration)
                 }
             }
         }
@@ -32,7 +35,15 @@ struct TranscriptView: View {
         let markerEntries = markers.map {
             Entry(id: $0.id, start: $0.offset, kind: .marker)
         }
-        return (segmentEntries + markerEntries).sorted { $0.start < $1.start }
+        let pauseEntries = pauses.map {
+            Entry(id: $0.id, start: $0.offset, kind: .pause(duration: $0.duration))
+        }
+        // A pause ties with the speech that resumes at the same instant, because the paused
+        // time is not in the timeline. Interruptions sort first so the gap lands between the
+        // two halves rather than after both.
+        return (segmentEntries + markerEntries + pauseEntries).sorted {
+            $0.start == $1.start ? $0.kind.rank < $1.kind.rank : $0.start < $1.start
+        }
     }
 
     private struct Entry {
@@ -43,6 +54,14 @@ struct TranscriptView: View {
         enum Kind {
             case segment(TranscriptSegment)
             case marker
+            case pause(duration: TimeInterval?)
+
+            var rank: Int {
+                switch self {
+                case .marker, .pause: 0
+                case .segment: 1
+                }
+            }
         }
     }
 }
@@ -81,6 +100,36 @@ private struct SegmentRow: View {
         return total >= 3600
             ? String(format: "%d:%02d:%02d", total / 3600, (total / 60) % 60, total % 60)
             : String(format: "%02d:%02d", (total / 60) % 60, total % 60)
+    }
+}
+
+/// A stretch that was not recorded.
+///
+/// Shown because the timestamps either side are continuous — they count recorded audio — so
+/// without this nothing on screen would explain how the conversation jumped.
+private struct PauseRow: View {
+    let duration: TimeInterval?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Spacer().frame(width: 64)
+            Label(text, systemImage: "pause.circle.fill")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+            Rectangle()
+                .fill(.quaternary)
+                .frame(height: 1)
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var text: String {
+        guard let duration, duration >= 1 else { return "Pausa" }
+        let total = Int(duration.rounded())
+        if total >= 3600 {
+            return "Pausa de \(total / 3600) h \(String(format: "%02d", (total / 60) % 60)) min"
+        }
+        return total >= 60 ? "Pausa de \(total / 60) min" : "Pausa de \(total) s"
     }
 }
 

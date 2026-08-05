@@ -113,15 +113,23 @@ public enum TranscriptRenderer {
     ) -> [Block] {
         var blocks: [Block] = []
         var previousEnd: TimeInterval = -.infinity
+        let pauseOffsets = manifest.pauses.map(\.offset)
 
         for segment in transcript.segments.sorted(by: { $0.start < $1.start }) {
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
             let speaker = name(for: segment, in: manifest)
 
+            // A pause always breaks the paragraph, however short the gap looks. The gap looks
+            // like nothing precisely because these timestamps count recorded audio, and the
+            // paused time is not in it — so the same speaker either side of a twenty-minute
+            // break would otherwise be run together into one uninterrupted sentence.
+            let interrupted = pauseOffsets.contains { previousEnd <= $0 && $0 <= segment.start }
+
             // Extend the previous paragraph when the same person simply kept talking.
             if case let .speech(previousSpeaker, start, previousText) = blocks.last,
                previousSpeaker == speaker,
+               !interrupted,
                segment.start - previousEnd <= options.paragraphGap
             {
                 blocks[blocks.count - 1] = .speech(
@@ -146,7 +154,14 @@ public enum TranscriptRenderer {
         }
         guard !interruptions.isEmpty else { return blocks }
 
-        return (blocks + interruptions).sorted { start(of: $0) < start(of: $1) }
+        // A pause sits exactly where the audio either side of it meets, so it ties with the
+        // speech that resumes there. Ordering the interruption first is what puts it between
+        // the two halves instead of after both — and the tie-break has to be explicit,
+        // because Swift's sort makes no promise about equal elements.
+        return (blocks + interruptions).sorted {
+            let (left, right) = (start(of: $0), start(of: $1))
+            return left == right ? rank(of: $0) < rank(of: $1) : left < right
+        }
     }
 
     private static func start(of block: Block) -> TimeInterval {
@@ -154,6 +169,13 @@ public enum TranscriptRenderer {
         case let .speech(_, start, _): start
         case let .marker(start, _): start
         case let .pause(start, _): start
+        }
+    }
+
+    private static func rank(of block: Block) -> Int {
+        switch block {
+        case .marker, .pause: 0
+        case .speech: 1
         }
     }
 

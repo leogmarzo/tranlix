@@ -322,7 +322,11 @@ public actor RecordingCoordinator {
         }
     }
 
-    /// Keeps the machine awake for the length of the session.
+    /// Keeps the machine awake for the length of the session, pauses included.
+    ///
+    /// Held through a pause on purpose. Letting the Mac sleep would tear down the microphone
+    /// engine and the system tap, and resuming onto a half-rebuilt graph is a far worse
+    /// outcome than a laptop that stayed awake through a coffee break.
     private func preventSleep() {
         activity = ProcessInfo.processInfo.beginActivity(
             options: [.idleSystemSleepDisabled, .userInitiated],

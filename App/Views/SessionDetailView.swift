@@ -289,6 +289,7 @@ struct SessionDetailView: View {
             TranscriptView(
                 transcript: transcript,
                 markers: manifest.markers,
+                pauses: manifest.pauses,
                 displayName: model.displayName(forSpeaker:)
             )
         }
