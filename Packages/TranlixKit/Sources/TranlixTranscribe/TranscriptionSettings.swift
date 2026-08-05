@@ -15,8 +15,11 @@ public struct TranscriptionSettings: Sendable, Codable, Equatable {
 
     public var englishLocaleIdentifier: String
 
+    /// Whisper by default, and worth the download it costs on first use: it detects the
+    /// language, and it has no notion of regional variants, so it never has to approximate
+    /// Rioplatense the way Apple's engine does by reaching for `es-CL`.
     public init(
-        engineID: EngineID = .apple,
+        engineID: EngineID = .whisperKit,
         spanishLocaleIdentifier: String = "es-CL",
         englishLocaleIdentifier: String = "en-US"
     ) {

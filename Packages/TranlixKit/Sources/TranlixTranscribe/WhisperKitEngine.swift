@@ -168,17 +168,18 @@ public actor WhisperKitEngine: TranscriptionEngine {
 
     // MARK: - Transcribing
 
-    public func transcribe(
-        chunk url: URL,
-        language: TranscriptionLanguage,
-        track: AudioTrack
-    ) async throws -> [TranscriptSegment] {
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw TranscriptionError.audioUnreadable(url)
-        }
-        let kit = try await kit()
-
-        let options = DecodingOptions(
+    /// How Whisper is asked to decode a chunk.
+    ///
+    /// Deliberately leaves `chunkingStrategy` unset, which keeps WhisperKit on its sequential
+    /// path. Setting it to `.vad` is tempting — Whisper decodes in 30-second windows and laying
+    /// them end to end from the start of the file puts boundaries mid-word, which is where the
+    /// model loses its run-up and where its repetition loops start — but on this version it
+    /// also routes into `transcribeWithOptions(audioArrays:)`, which fans the windows out over
+    /// `concurrentWorkerCount` tasks, defaulting to *sixteen* on macOS. Sixteen tasks driving
+    /// one CoreML model segfaults in `objc_autoreleasePoolPop`. Revisit with
+    /// `concurrentWorkerCount: 1`, and only with a long recording to prove it.
+    static func decodingOptions(for language: TranscriptionLanguage) -> DecodingOptions {
+        DecodingOptions(
             task: .transcribe,
             // Whisper wants a bare language code, not a regional identifier: `es`, not
             // `es-CL`. It has no notion of variants.
@@ -190,6 +191,19 @@ public actor WhisperKitEngine: TranscriptionEngine {
             skipSpecialTokens: true,
             wordTimestamps: true
         )
+    }
+
+    public func transcribe(
+        chunk url: URL,
+        language: TranscriptionLanguage,
+        track: AudioTrack
+    ) async throws -> [TranscriptSegment] {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw TranscriptionError.audioUnreadable(url)
+        }
+        let kit = try await kit()
+
+        let options = Self.decodingOptions(for: language)
 
         let results: [TranscriptionResult]
         do {

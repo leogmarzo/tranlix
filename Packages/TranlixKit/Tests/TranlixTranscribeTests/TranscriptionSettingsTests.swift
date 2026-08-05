@@ -25,9 +25,12 @@ struct TranscriptionSettingsTests {
         #expect(settings.language(for: .auto) == .automatic)
     }
 
-    @Test("Apple is the default engine, since it needs no download to work")
+    /// Worth the download it costs on first use. Whisper detects the language, has no notion of
+    /// regional variants so it never has to approximate Rioplatense the way Apple's `es-CL`
+    /// does, and it is the only engine the VAD chunking applies to.
+    @Test("Whisper is the default engine")
     func defaultEngine() {
-        #expect(TranscriptionSettings().engineID == .apple)
+        #expect(TranscriptionSettings().engineID == .whisperKit)
     }
 
     @Test("settings survive a round trip, because they are stored between launches")
