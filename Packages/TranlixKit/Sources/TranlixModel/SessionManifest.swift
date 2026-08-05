@@ -37,6 +37,10 @@ public struct SessionManifest: Codable, Sendable, Equatable {
     public var markers: [Marker]
     public var deviceChanges: [DeviceChangeEvent]
 
+    /// Stretches the user paused. Elided from the audio, so they explain a jump that would
+    /// otherwise look like the recording lost something.
+    public var pauses: [PauseEvent]
+
     /// Raw speaker id (`system-1`, `mic`) to the name the user typed.
     ///
     /// Renaming writes here rather than rewriting the transcript, which keeps the operation
@@ -72,6 +76,7 @@ public struct SessionManifest: Codable, Sendable, Equatable {
         tracks: [AudioTrack: TrackInfo] = [.mic: TrackInfo(), .system: TrackInfo()],
         markers: [Marker] = [],
         deviceChanges: [DeviceChangeEvent] = [],
+        pauses: [PauseEvent] = [],
         speakerNames: [String: String] = [:],
         transcriptionEngine: String? = nil,
         diarization: DiarizationInfo? = nil,
@@ -89,6 +94,7 @@ public struct SessionManifest: Codable, Sendable, Equatable {
         self.tracks = tracks
         self.markers = markers
         self.deviceChanges = deviceChanges
+        self.pauses = pauses
         self.speakerNames = speakerNames
         self.transcriptionEngine = transcriptionEngine
         self.diarization = diarization
@@ -117,6 +123,7 @@ public struct SessionManifest: Codable, Sendable, Equatable {
         deviceChanges = try container.decodeIfPresent(
             [DeviceChangeEvent].self, forKey: .deviceChanges
         ) ?? []
+        pauses = try container.decodeIfPresent([PauseEvent].self, forKey: .pauses) ?? []
         speakerNames = try container.decodeIfPresent(
             [String: String].self, forKey: .speakerNames
         ) ?? [:]

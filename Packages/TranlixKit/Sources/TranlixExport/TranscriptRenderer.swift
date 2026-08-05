@@ -18,6 +18,11 @@ public enum TranscriptRenderer {
         /// Markers the user dropped while recording, in place.
         public var includeMarkers: Bool
 
+        /// Gaps where the user paused. Worth keeping even in the prompt: without them the
+        /// summariser reads straight across a twenty-minute break and infers a continuity
+        /// that was never there.
+        public var includePauses: Bool
+
         /// Consecutive blocks from the same speaker separated by no more than this are joined
         /// into one paragraph. A transcript broken into one line per sentence is exhausting to
         /// read and wastes tokens repeating the same name.
@@ -27,11 +32,13 @@ public enum TranscriptRenderer {
             includeTimecodes: Bool = true,
             includeHeader: Bool = true,
             includeMarkers: Bool = true,
+            includePauses: Bool = true,
             paragraphGap: TimeInterval = 3
         ) {
             self.includeTimecodes = includeTimecodes
             self.includeHeader = includeHeader
             self.includeMarkers = includeMarkers
+            self.includePauses = includePauses
             self.paragraphGap = paragraphGap
         }
 
@@ -71,6 +78,11 @@ public enum TranscriptRenderer {
                 let stamp = options.includeTimecodes ? " `\(timecode(start))`" : ""
                 lines.append("— **Marcador**\(stamp)\(label.map { ": \($0)" } ?? "") —")
                 lines.append("")
+            case let .pause(start, duration):
+                let stamp = options.includeTimecodes ? " `\(timecode(start))`" : ""
+                let length = duration.map { " de \(formattedDuration($0))" } ?? ""
+                lines.append("— **Pausa**\(length)\(stamp): acá la grabación se detuvo y siguió después —")
+                lines.append("")
             }
         }
 
@@ -83,6 +95,10 @@ public enum TranscriptRenderer {
     public enum Block: Sendable, Equatable {
         case speech(speaker: String, start: TimeInterval, text: String)
         case marker(start: TimeInterval, label: String?)
+
+        /// A stretch that was not recorded. `duration` is real time, which is why it cannot be
+        /// read off the surrounding timestamps: those only count recorded audio.
+        case pause(start: TimeInterval, duration: TimeInterval?)
     }
 
     /// Segments grouped into paragraphs and interleaved with markers.
@@ -117,16 +133,27 @@ public enum TranscriptRenderer {
             previousEnd = max(previousEnd, segment.end)
         }
 
-        guard options.includeMarkers, !manifest.markers.isEmpty else { return blocks }
+        var interruptions: [Block] = []
+        if options.includeMarkers {
+            interruptions += manifest.markers.map {
+                Block.marker(start: $0.offset, label: $0.label)
+            }
+        }
+        if options.includePauses {
+            interruptions += manifest.pauses.map {
+                Block.pause(start: $0.offset, duration: $0.duration)
+            }
+        }
+        guard !interruptions.isEmpty else { return blocks }
 
-        let markers = manifest.markers.map { Block.marker(start: $0.offset, label: $0.label) }
-        return (blocks + markers).sorted { start(of: $0) < start(of: $1) }
+        return (blocks + interruptions).sorted { start(of: $0) < start(of: $1) }
     }
 
     private static func start(of block: Block) -> TimeInterval {
         switch block {
         case let .speech(_, start, _): start
         case let .marker(start, _): start
+        case let .pause(start, _): start
         }
     }
 

@@ -275,9 +275,13 @@ struct RecordingCoordinatorTests {
 
     // MARK: - Markers
 
-    @Test("a marker lands at the elapsed time, not at the raw clock reading")
-    func markerOffsetIsRelativeToSessionStart() async throws {
+    @Test("a marker lands where the audio is, not where the clock is")
+    func markerOffsetFollowsTheRecordedAudio() async throws {
         try await withTemporaryRoot { root in
+            // Offsets are counted in recorded frames, not elapsed wall clock. Audio clocks
+            // drift against the system clock over a long class, and a paused session records
+            // nothing while the clock runs on — either way a marker placed by wall clock ends
+            // up pointing past the sound it was meant to mark.
             let sources = Sources()
             let clock = Clock(100)
             let coordinator = RecordingCoordinator(
@@ -288,18 +292,20 @@ struct RecordingCoordinatorTests {
             )
 
             let handle = try await coordinator.start(title: "Clase", language: .spanish, now: epoch)
-            sources.mic.emit(frames: 1600, hostTime: 100)
-            // Let the first-buffer time reach the manifest before marking.
-            try await Task.sleep(for: .milliseconds(60))
+            sources.mic.emit(frames: 32000, hostTime: 100)
+            try await waitForRecorded(2, on: coordinator)
 
+            // The clock races ahead; the marker must ignore it entirely.
             clock.advance(by: 42)
             try await coordinator.addMarker(label: "acá", now: epoch)
             try await coordinator.stop()
 
-            let markers = await handle.manifest.markers
-            #expect(markers.count == 1)
-            #expect(abs((markers.first?.offset ?? 0) - 42) < 1e-9)
-            #expect(markers.first?.label == "acá")
+            let manifest = await handle.manifest
+            #expect(manifest.markers.count == 1)
+            #expect(abs((manifest.markers.first?.offset ?? 0) - 2) < 1e-9)
+            #expect(manifest.markers.first?.label == "acá")
+            // Never past the end of the audio it points into.
+            #expect((manifest.markers.first?.offset ?? 0) <= manifest.duration)
         }
     }
 
@@ -319,7 +325,7 @@ struct RecordingCoordinatorTests {
 
             let handle = try await coordinator.start(title: "Clase", language: .spanish, now: epoch)
             sources.mic.emit(frames: 8000, hostTime: 100)
-            try await Task.sleep(for: .milliseconds(60))
+            try await waitForRecorded(0.5, on: coordinator)
 
             clock.advance(by: 7)
             sources.mic.emitDeviceChange("AirPods desconectados")
@@ -328,6 +334,7 @@ struct RecordingCoordinatorTests {
             // Still recording: the point is that unplugging headphones does not end the class.
             #expect(await coordinator.isRecording)
             sources.mic.emit(frames: 4000, hostTime: 108)
+            try await waitForRecorded(0.75, on: coordinator)
             try await coordinator.stop()
 
             let manifest = await handle.manifest
@@ -339,7 +346,9 @@ struct RecordingCoordinatorTests {
             #expect(changes.count == 1)
             #expect(changes.first?.track == .mic)
             #expect(changes.first?.detail == "AirPods desconectados")
-            #expect(abs((changes.first?.offset ?? 0) - 7) < 1e-9)
+            // Where the seam is in the audio, which is what makes it findable later — not
+            // where the wall clock happened to be.
+            #expect(abs((changes.first?.offset ?? 0) - 0.5) < 1e-9)
         }
     }
 

@@ -93,6 +93,18 @@ public actor SessionHandle {
         try update { $0.deviceChanges.append(event) }
     }
 
+    /// Opens a pause. Written before capture stops, so a session killed while paused still
+    /// says so rather than looking like it ended mid-sentence.
+    public func recordPause(_ event: PauseEvent) throws {
+        try update { $0.pauses.append(event) }
+    }
+
+    /// Closes the pause that is still open, if there is one.
+    public func recordResume(at date: Date) throws {
+        guard let index = manifest.pauses.lastIndex(where: { $0.resumedAt == nil }) else { return }
+        try update { $0.pauses[index].resumedAt = date }
+    }
+
     public func renameSpeaker(id: String, to name: String) throws {
         try update { manifest in
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)

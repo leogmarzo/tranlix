@@ -10,7 +10,8 @@ struct TranscriptRendererTests {
 
     private func manifest(
         speakerNames: [String: String] = [:],
-        markers: [Marker] = []
+        markers: [Marker] = [],
+        pauses: [PauseEvent] = []
     ) -> SessionManifest {
         SessionManifest(
             title: "Clase de estadística",
@@ -18,6 +19,7 @@ struct TranscriptRendererTests {
             state: .ready,
             language: .spanish,
             markers: markers,
+            pauses: pauses,
             speakerNames: speakerNames
         )
     }
@@ -153,6 +155,62 @@ struct TranscriptRendererTests {
 
         #expect(blocks.count == 3)
         #expect(blocks[1] == .marker(start: 10, label: "importante"))
+    }
+
+    // MARK: - Pauses
+
+    @Test("a pause is shown where the recording stopped, with how long it lasted")
+    func showsPauses() {
+        // Otherwise the jump is inexplicable: the timestamps are continuous because they
+        // count recorded audio, so nothing on the page would hint that time passed.
+        let sut = transcript([
+            segment("antes del recreo", speaker: "system-1", from: 0, to: 5),
+            segment("volvimos", speaker: "system-1", from: 5, to: 8),
+        ])
+        let paused = manifest(pauses: [
+            PauseEvent(
+                offset: 5,
+                pausedAt: epoch,
+                resumedAt: epoch.addingTimeInterval(900)
+            ),
+        ])
+        let blocks = TranscriptRenderer.blocks(transcript: sut, manifest: paused)
+
+        #expect(blocks.count == 3)
+        #expect(blocks[1] == .pause(start: 5, duration: 900))
+
+        let markdown = TranscriptRenderer.markdown(transcript: sut, manifest: paused)
+        #expect(markdown.contains("Pausa"))
+        #expect(markdown.contains("15 min"))
+    }
+
+    @Test("the summariser is told about the gap too")
+    func promptKeepsPauses() {
+        // Without it the model reads straight across a break and infers a continuity that
+        // was never there — exactly the invention the seeded prompts forbid.
+        let sut = transcript([
+            segment("primera parte", speaker: "system-1", from: 0, to: 5),
+            segment("segunda parte", speaker: "system-1", from: 5, to: 9),
+        ])
+        let paused = manifest(pauses: [
+            PauseEvent(offset: 5, pausedAt: epoch, resumedAt: epoch.addingTimeInterval(1200)),
+        ])
+        let markdown = TranscriptRenderer.markdown(
+            transcript: sut, manifest: paused, options: .prompt
+        )
+
+        #expect(markdown.contains("Pausa"))
+        #expect(!markdown.contains("00:05"))
+    }
+
+    @Test("a pause still open renders without inventing a duration")
+    func handlesUnfinishedPause() {
+        let sut = transcript([segment("hola", speaker: "system-1", from: 0, to: 2)])
+        let paused = manifest(pauses: [PauseEvent(offset: 2, pausedAt: epoch)])
+        let blocks = TranscriptRenderer.blocks(transcript: sut, manifest: paused)
+
+        #expect(blocks.last == .pause(start: 2, duration: nil))
+        #expect(TranscriptRenderer.markdown(transcript: sut, manifest: paused).contains("Pausa"))
     }
 
     // MARK: - Options

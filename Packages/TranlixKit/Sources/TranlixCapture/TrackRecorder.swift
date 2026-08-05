@@ -36,6 +36,20 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
     private let firstHostTimeBits = Atomic<UInt64>(sentinelUnset)
     private let levelBits = Atomic<UInt32>(0)
 
+    /// Frames handed to the writer so far.
+    ///
+    /// Mirrors `ChunkWriter.totalFrames` as an atomic so the UI can read the recording's
+    /// position every frame of animation without taking a hop onto the writer queue, which
+    /// would stall behind a disk write.
+    private let writtenFrames = Atomic<Int64>(0)
+
+    /// While set, incoming audio is discarded instead of recorded.
+    ///
+    /// Read on the audio thread, so it has to be an atomic load and nothing more. Dropping
+    /// here rather than further down is what makes a pause cost nothing: no silence written,
+    /// no disk used, no minutes of nothing for the transcriber to chew through.
+    private let paused = Atomic<Bool>(false)
+
     private static let sentinelUnset = UInt64.max
 
     /// Signals that a chunk finished and is waiting in `takePendingChunks`.
@@ -83,6 +97,11 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
 
     /// Real-time safe: two atomic stores and a memcpy, no allocation and no locks.
     func receive(_ samples: UnsafePointer<Float>, frameCount: Int, hostTime: TimeInterval) {
+        // Dropped before the ring, so a pause leaves no trace in the ring, in the files, or in
+        // the frame count. Samples already in the ring are pre-pause and still get written:
+        // `pause()` drains before it closes the chunk.
+        guard !paused.load(ordering: .relaxed) else { return }
+
         _ = firstHostTimeBits.compareExchange(
             expected: Self.sentinelUnset,
             desired: hostTime.bitPattern,
@@ -134,6 +153,28 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
         }
     }
 
+    /// Stops recording without stopping capture, and closes the chunk in progress.
+    ///
+    /// The backend keeps running: tearing down the microphone engine and the system tap would
+    /// mean renegotiating both on resume, which at session start costs seconds and races the
+    /// two tracks against each other. A flag costs nothing and cannot fail.
+    ///
+    /// The chunk is closed so that everything recorded up to the pause is already complete on
+    /// disk and in the manifest. A session killed while paused loses nothing at all.
+    func pause() {
+        guard !paused.load(ordering: .relaxed) else { return }
+        paused.store(true, ordering: .relaxed)
+        rollOverChunk()
+        // Otherwise the meters would sit frozen at whatever was playing when the user paused.
+        levelBits.store(Float(0).bitPattern, ordering: .relaxed)
+    }
+
+    func resume() {
+        paused.store(false, ordering: .relaxed)
+    }
+
+    var isPaused: Bool { paused.load(ordering: .relaxed) }
+
     /// Hands over every chunk closed since the last call. Safe from any thread.
     func takePendingChunks() -> [ChunkRef] {
         pendingLock.lock()
@@ -167,6 +208,7 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
                 let closed = try scratch.withUnsafeBufferPointer { buffer in
                     try writer.append(buffer.baseAddress!, count: count)
                 }
+                writtenFrames.store(writer.totalFrames, ordering: .relaxed)
                 for chunk in closed { enqueue(chunk) }
             } catch {
                 onWriteError?(error)
@@ -204,7 +246,13 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
     /// is not, the recording has holes and the session should say so.
     var droppedFrames: Int { ring.droppedFrames }
 
+    /// Frames recorded so far. Lock-free, so the UI can ask on every tick.
+    ///
+    /// This is the app's clock while recording. Positions derived from it stay true to the
+    /// audio: they do not drift against the system clock over a two-hour class, and they do
+    /// not advance while paused — which is exactly what a marker or an elapsed-time display
+    /// has to do to keep pointing at the right moment of the file.
     var totalFrames: Int64 {
-        queue.sync { writer.totalFrames }
+        writtenFrames.load(ordering: .relaxed)
     }
 }

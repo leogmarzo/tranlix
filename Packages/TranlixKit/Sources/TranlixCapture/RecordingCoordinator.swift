@@ -14,6 +14,9 @@ public enum RecordingEvent: Sendable, Equatable {
     /// rather than hidden so that a recording with holes is never presented as intact.
     case droppedFrames(AudioTrack, Int)
 
+    case paused(offset: TimeInterval)
+    case resumed(pausedFor: TimeInterval)
+
     case stopped(URL)
 }
 
@@ -44,7 +47,12 @@ public typealias AudioSourceFactory = @Sendable (AudioTrack, Double) throws -> a
 /// protect one property: a session that was interrupted, whose device changed, or whose app
 /// was killed still leaves usable audio and a manifest that explains it.
 public actor RecordingCoordinator {
+    /// A session is under way. Stays true across a pause: the session has not ended, it is
+    /// just not capturing at this instant.
     public private(set) var isRecording = false
+
+    /// Capturing is suspended and can be resumed.
+    public private(set) var isPaused = false
 
     private let store: SessionStore
     private let configuration: RecordingConfiguration
@@ -186,9 +194,8 @@ public actor RecordingCoordinator {
 
     public func addMarker(label: String?, now: Date) async throws {
         guard let handle else { return }
-        let start = await handle.manifest.startHostTime ?? hostTime()
         let marker = Marker(
-            offset: max(0, hostTime() - start),
+            offset: await elapsed(),
             label: label,
             createdAt: now
         )
@@ -200,10 +207,65 @@ public actor RecordingCoordinator {
         recorders.mapValues(\.level)
     }
 
-    /// Seconds since the first sample of the session.
+    /// How much audio the session holds, in seconds.
+    ///
+    /// Counted in recorded frames rather than in elapsed wall clock, for two reasons. Audio
+    /// clocks drift against the system clock, so over a long class the two disagree by enough
+    /// to smear the merged transcript. And a paused session records nothing while the wall
+    /// clock keeps running — anything positioned by wall clock would land past the end of the
+    /// audio it is supposed to point at.
+    ///
+    /// This is the same quantity `SessionManifest.duration` reports once the session is on
+    /// disk; it is computed live here because the manifest only learns about a chunk when the
+    /// chunk closes.
     public func elapsed() async -> TimeInterval {
-        guard let handle, let start = await handle.manifest.startHostTime else { return 0 }
-        return max(0, hostTime() - start)
+        guard let handle else { return 0 }
+        let manifest = await handle.manifest
+        return AudioTrack.allCases.reduce(0) { furthest, track in
+            guard let recorder = recorders[track] else { return furthest }
+            let seconds = Double(recorder.totalFrames) / configuration.sampleRate
+            return max(furthest, manifest.offset(for: track) + seconds)
+        }
+    }
+
+    // MARK: - Pausing
+
+    /// Suspends capture without ending the session.
+    ///
+    /// The paused stretch is elided rather than recorded as silence: nothing is written, so an
+    /// hour-long break costs no disk, no transcription time and no waiting. Both tracks close
+    /// their chunk on the way in, which means everything recorded so far is already complete
+    /// on disk and in the manifest — a session killed while paused loses nothing.
+    ///
+    /// The two tracks stop at their own next audio callback rather than at one shared instant,
+    /// so each pause can shift them against each other by up to one callback, on the order of
+    /// ten milliseconds. Correcting that would mean padding from the system clock, which is
+    /// the very clock this design avoids; a bounded, unbiased ten milliseconds per pause is
+    /// the better trade, and well under what diarization can resolve anyway.
+    public func pause(now: Date = Date()) async throws {
+        guard isRecording, !isPaused, let handle else { return }
+        isPaused = true
+
+        let offset = await elapsed()
+        for recorder in recorders.values { recorder.pause() }
+        for track in AudioTrack.allCases { await flushTrack(track) }
+
+        // Written after the flush so the offset it carries is one the manifest can already
+        // account for in chunks.
+        try await handle.recordPause(PauseEvent(offset: offset, pausedAt: now))
+        emit(.paused(offset: offset))
+    }
+
+    public func resume(now: Date = Date()) async throws {
+        guard isRecording, isPaused, let handle else { return }
+
+        let pausedFor = await handle.manifest.pauses.last
+            .map { max(0, now.timeIntervalSince($0.pausedAt)) } ?? 0
+        try await handle.recordResume(at: now)
+
+        isPaused = false
+        for recorder in recorders.values { recorder.resume() }
+        emit(.resumed(pausedFor: pausedFor))
     }
 
     /// Moves everything a track has finished into the manifest.
@@ -235,10 +297,9 @@ public actor RecordingCoordinator {
         recorders[track]?.rollOverChunk()
         await flushTrack(track)
 
-        let start = await handle.manifest.startHostTime ?? hostTime()
         let event = DeviceChangeEvent(
             track: track,
-            offset: max(0, hostTime() - start),
+            offset: await elapsed(),
             detail: detail,
             occurredAt: Date()
         )
@@ -271,13 +332,24 @@ public actor RecordingCoordinator {
 
     // MARK: - Stopping
 
-    /// Stops both tracks and leaves the session in `.recorded`.
+    /// Ends the session for good and leaves it in `.recorded`.
+    ///
+    /// Works the same whether the session was running or paused, and is deliberately the only
+    /// thing that ends one: the stop button pauses, so finishing always takes a second,
+    /// separate decision. Losing a class to a misplaced click is the failure this whole design
+    /// exists to prevent.
     ///
     /// Each recorder drains synchronously, so by the time this returns the manifest describes
     /// every sample that reached the disk.
-    public func stop() async throws {
+    public func stop(now: Date = Date()) async throws {
         guard isRecording, let handle else { return }
+        // A session finished from a pause has an open pause event. Closing it keeps the
+        // manifest honest about how long the recording was actually suspended.
+        if isPaused {
+            try? await handle.recordResume(at: now)
+        }
         isRecording = false
+        isPaused = false
 
         // Each recorder drains synchronously, so once this returns everything that reached
         // the disk is sitting in the pending queues.
@@ -303,6 +375,7 @@ public actor RecordingCoordinator {
     public func finalizeForTermination() async {
         guard isRecording else { return }
         isRecording = false
+        isPaused = false
         await cleanUp()
         for track in AudioTrack.allCases {
             await flushTrack(track)

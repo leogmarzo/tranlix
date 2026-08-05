@@ -83,14 +83,19 @@ struct RecordView: View {
 
     private var meters: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack {
+            HStack(spacing: 10) {
                 Text("Pistas")
                     .font(.callout.weight(.medium))
+                if model.isPaused {
+                    Label("En pausa", systemImage: "pause.circle.fill")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.orange)
+                }
                 Spacer()
                 Text(elapsedText)
                     .font(.system(.title2, design: .monospaced))
                     .fontWeight(.medium)
-                    .foregroundStyle(model.isRecording ? .primary : .secondary)
+                    .foregroundStyle(model.isCapturing ? .primary : .secondary)
                     .contentTransition(.numericText())
             }
 
@@ -98,16 +103,22 @@ struct RecordView: View {
                 label: "Micrófono",
                 systemImage: "mic",
                 level: model.levels[.mic] ?? 0,
-                isActive: model.isRecording,
+                isActive: model.isCapturing,
                 isSilent: model.silentTracks.contains(.mic)
             )
             LevelMeter(
                 label: "Audio del sistema",
                 systemImage: "speaker.wave.2",
                 level: model.levels[.system] ?? 0,
-                isActive: model.isRecording,
+                isActive: model.isCapturing,
                 isSilent: model.silentTracks.contains(.system)
             )
+
+            if model.isPaused {
+                Text("La grabación sigue abierta y lo grabado ya está en disco. Lo que suene ahora no se guarda.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             Label(
                 "Usá auriculares. Con parlantes el micrófono capta también la clase y el texto sale duplicado.",
@@ -141,6 +152,11 @@ struct RecordView: View {
 
     // MARK: - Controls
 
+    /// Stopping takes two actions on purpose.
+    ///
+    /// The stop button pauses; finishing is a second, separate button that only exists once
+    /// paused. A misplaced click costs a pause, never a class — which is the whole reason the
+    /// rest of this app is built the way it is.
     private var controls: some View {
         HStack(spacing: 16) {
             Button {
@@ -152,7 +168,7 @@ struct RecordView: View {
                 )
             }
             .keyboardShortcut("m", modifiers: .command)
-            .disabled(!model.isRecording)
+            .disabled(!model.isCapturing)
 
             Spacer()
 
@@ -163,27 +179,46 @@ struct RecordView: View {
                 .buttonStyle(.link)
             }
 
+            if model.isPaused {
+                Button {
+                    Task { await model.finish() }
+                } label: {
+                    Label("Finalizar", systemImage: "stop.fill")
+                }
+                .tint(.red)
+                .disabled(model.isBusy)
+            }
+
             Button {
                 Task {
-                    if model.isRecording {
-                        await model.stop()
+                    if model.isPaused {
+                        await model.resume()
+                    } else if model.isRecording {
+                        await model.pause()
                     } else {
                         await model.start()
                     }
                 }
             } label: {
-                Label(
-                    model.isRecording ? "Detener" : "Grabar",
-                    systemImage: model.isRecording ? "stop.fill" : "record.circle"
-                )
-                .frame(minWidth: 90)
+                Label(primaryTitle, systemImage: primaryIcon)
+                    .frame(minWidth: 90)
             }
             .buttonStyle(.borderedProminent)
-            .tint(model.isRecording ? .red : .accentColor)
+            .tint(model.isCapturing ? .red : .accentColor)
             .keyboardShortcut("r", modifiers: .command)
             .disabled(model.isBusy)
         }
         .padding(20)
         .background(.bar)
+    }
+
+    private var primaryTitle: String {
+        if model.isPaused { return "Reanudar" }
+        return model.isRecording ? "Pausar" : "Grabar"
+    }
+
+    private var primaryIcon: String {
+        if model.isPaused { return "play.fill" }
+        return model.isRecording ? "pause.fill" : "record.circle"
     }
 }

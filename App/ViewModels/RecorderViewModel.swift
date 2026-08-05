@@ -16,6 +16,10 @@ final class RecorderViewModel {
     var language: SessionLanguage = .spanish
 
     private(set) var isRecording = false
+
+    /// Capture is suspended. The session has not ended: `isRecording` stays true.
+    private(set) var isPaused = false
+
     private(set) var isBusy = false
     private(set) var elapsed: TimeInterval = 0
     private(set) var levels: [AudioTrack: Float] = [:]
@@ -63,6 +67,9 @@ final class RecorderViewModel {
 
     var canRecord: Bool { !isRecording && !isBusy }
 
+    /// Capturing right now, as opposed to open-but-paused.
+    var isCapturing: Bool { isRecording && !isPaused }
+
     func start() async {
         guard canRecord else { return }
         isBusy = true
@@ -88,6 +95,7 @@ final class RecorderViewModel {
         do {
             try await coordinator.start(title: title, language: language, now: Date())
             isRecording = true
+            isPaused = false
             startPolling(coordinator)
         } catch {
             eventTask?.cancel()
@@ -96,7 +104,46 @@ final class RecorderViewModel {
         }
     }
 
-    func stop() async {
+    /// Suspends capture. This is what the stop button does.
+    ///
+    /// Deliberately not the end of the session: ending one takes a second, explicit action,
+    /// so a misplaced click costs a pause rather than a class.
+    func pause() async {
+        guard isCapturing, !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            try await environment.coordinator.pause(now: Date())
+            isPaused = true
+            levels = [:]
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func resume() async {
+        guard isRecording, isPaused, !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            try await environment.coordinator.resume(now: Date())
+            isPaused = false
+            // Silence is judged over a window, and the paused stretch is not evidence about
+            // whether a device is working.
+            let now = Date()
+            lastSignalAt = Dictionary(
+                uniqueKeysWithValues: AudioTrack.allCases.map { ($0, now) }
+            )
+            silentTracks = []
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Ends the session for good.
+    func finish() async {
         guard isRecording else { return }
         isBusy = true
         defer { isBusy = false }
@@ -105,12 +152,13 @@ final class RecorderViewModel {
         pollTask = nil
 
         do {
-            try await environment.coordinator.stop()
+            try await environment.coordinator.stop(now: Date())
         } catch {
             errorMessage = error.localizedDescription
         }
 
         isRecording = false
+        isPaused = false
         levels = [:]
         silentTracks = []
         eventTask?.cancel()
@@ -120,7 +168,7 @@ final class RecorderViewModel {
     }
 
     func addMarker() async {
-        guard isRecording else { return }
+        guard isCapturing else { return }
         do {
             try await environment.coordinator.addMarker(label: nil, now: Date())
             markerCount += 1
@@ -139,7 +187,7 @@ final class RecorderViewModel {
                 guard !Task.isCancelled else { return }
                 self?.levels = levels
                 self?.elapsed = elapsed
-                self?.updateSilence()
+                if self?.isPaused == false { self?.updateSilence() }
                 try? await Task.sleep(for: .milliseconds(80))
             }
         }
@@ -185,6 +233,9 @@ final class RecorderViewModel {
                 text: "\(name(of: track)): se perdieron \(frames) muestras, la grabación tiene huecos",
                 isSevere: true
             ))
+        case .paused, .resumed:
+            // The buttons already say which it is; a notice would only be noise.
+            break
         case let .stopped(folder):
             lastSessionFolder = folder
         }

@@ -65,3 +65,27 @@ final class ScriptedAudioSource: AudioSource, @unchecked Sendable {
         onDeviceChange?(detail)
     }
 }
+
+enum CaptureTestTimeout: Error {
+    case waitingForAudio(expected: TimeInterval, reached: TimeInterval)
+}
+
+/// Waits until the coordinator has recorded `seconds` of audio.
+///
+/// Polls instead of sleeping a fixed interval. The writer drains on its own timer, and a
+/// fixed sleep that is comfortable when one test runs alone becomes a flake when the whole
+/// suite runs in parallel on a busy machine.
+func waitForRecorded(
+    _ seconds: TimeInterval,
+    on coordinator: RecordingCoordinator,
+    timeout: TimeInterval = 5
+) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    var reached: TimeInterval = 0
+    while Date() < deadline {
+        reached = await coordinator.elapsed()
+        if abs(reached - seconds) < 1e-9 { return }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    throw CaptureTestTimeout.waitingForAudio(expected: seconds, reached: reached)
+}
