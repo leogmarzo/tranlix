@@ -48,6 +48,7 @@ permissions on the next build.
 ```
 project.yml              XcodeGen spec — the single source of truth for the app target
 App/                     SwiftUI shell: views, view models, Info.plist, entitlements
+App/AppIcon.icon/        Icon Composer bundle: icon.json plus the SVG layers it composes
 Packages/TranlixKit/     all logic, as a local Swift package
   TranlixModel           Codable types; the on-disk contract. A leaf with no dependencies
   TranlixStore           session folders, atomic manifest I/O, library scan, recovery

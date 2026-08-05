@@ -129,21 +129,28 @@ set it, and it is `@State` local to `RootView`. A small `AppNavigation`
 observable holding `selection` moves into `AppEnvironment`; `RootView` binds to
 it instead of owning it.
 
-### Implementation and fallback
+### Implementation
 
-`MenuBarExtra(isInserted:)` with `.menuBarExtraStyle(.menu)`, declared in
-`TranlixApp` next to the existing `WindowGroup` and `Settings` scenes.
+`MenuBarController`, an AppKit object over `NSStatusItem`, created by the app and
+following the recorder through `withObservationTracking`.
 
-The risk is the label. Status items are conventionally template images, and
-SwiftUI may flatten a colored label to monochrome — which would cost the red dot,
-the one thing that makes the indicator legible at a glance. Width jitter is the
-second risk: proportional digits make the item resize every second.
+The first plan was SwiftUI's `MenuBarExtra`, with `NSStatusItem` as a fallback if
+the label came out wrong. Two things could come out wrong: SwiftUI renders a menu
+bar label into a template image, which is monochrome by definition and would cost
+the red dot — the one thing that makes the indicator legible at a glance — and
+proportional digits would resize the item every second.
 
-Both are checked by building and screenshotting the menu bar. If either shows
-up, the label moves to a small `MenuBarController` over `NSStatusItem`, where a
-non-template image and an attributed title with monospaced digits are both
-guaranteed. The menu content is unchanged in that case; only the label rendering
-moves to AppKit.
+The fallback was taken before writing the `MenuBarExtra` version, because the
+plan for choosing between them was to look at the menu bar, and screen access was
+not available. `NSStatusItem` makes both properties true by construction rather
+than by inspection: a non-template `NSImage` keeps its color, and an attributed
+title with `monospacedDigitSystemFont` cannot jitter. Measured on the real code:
+the dot's centre pixel is `1.00, 0.32, 0.30` and the item is 76 pt wide at
+`00:00:59`, `01:12:34` and `09:59:59` alike.
+
+The cost is that the menu is built in AppKit — `NSMenuDelegate.menuNeedsUpdate`,
+rebuilding on open rather than on every tick, so a menu that is on screen never
+flickers and a menu that is closed costs nothing.
 
 ### Closing the window
 
@@ -179,8 +186,8 @@ also puts it under test — the App target has no test target, `TranlixKit` does
 | `App/AppIcon.icon/Assets/lines.svg` | new |
 | `scripts/icon.sh` | new — fallback PNG generation |
 | `project.yml` | icon source entry and build setting |
-| `App/TranlixApp.swift` | owns the recorder, declares `MenuBarExtra`, termination rule |
-| `App/Views/MenuBarContent.swift` | new — the menu |
+| `App/TranlixApp.swift` | owns the recorder and the controller, termination rule |
+| `App/MenuBarController.swift` | new — the status item and its menu |
 | `App/AppEnvironment.swift` | owns `AppNavigation` |
 | `App/Views/RootView.swift` | takes the recorder, binds selection |
 | `App/Views/RecordView.swift` | uses the shared formatter |
