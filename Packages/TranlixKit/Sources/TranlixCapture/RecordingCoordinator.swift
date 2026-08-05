@@ -33,6 +33,14 @@ public struct RecordingConfiguration: Sendable {
     public var drainInterval: DispatchTimeInterval = .milliseconds(100)
     public var diskCheckInterval: TimeInterval = 30
 
+    /// How often each track is checked for having stopped delivering audio.
+    ///
+    /// Silence still produces frames, so a track whose frame count has not moved between two
+    /// checks has stopped. Five seconds is long enough that no ordinary scheduling hiccup
+    /// looks like death, and short enough that a dead microphone costs seconds rather than the
+    /// rest of the meeting.
+    public var livenessCheckInterval: TimeInterval = 5
+
     public init() {}
 }
 
@@ -64,6 +72,14 @@ public actor RecordingCoordinator {
     private var sources: [AudioTrack: any AudioSource] = [:]
     private var activity: (any NSObjectProtocol)?
     private var diskCheck: Task<Void, Never>?
+    private var livenessCheck: Task<Void, Never>?
+
+    /// Frames each track had at the previous liveness check.
+    private var lastObservedFrames: [AudioTrack: Int64] = [:]
+
+    /// Tracks already reported as stalled, so one dead microphone leaves one entry in the
+    /// manifest rather than one every few seconds for the rest of the session.
+    private var stalledTracks: Set<AudioTrack> = []
 
     private let events = AsyncStream.makeStream(of: RecordingEvent.self)
 
@@ -140,6 +156,7 @@ public actor RecordingCoordinator {
 
         preventSleep()
         startDiskMonitor()
+        startLivenessMonitor()
         emit(.started(layout.root))
         return handle
     }
@@ -307,6 +324,80 @@ public actor RecordingCoordinator {
         emit(.deviceChanged(track, detail))
     }
 
+    // MARK: - Liveness
+
+    /// Watches for a track that has stopped delivering audio.
+    ///
+    /// A capture backend can die quietly. `AVAudioEngine` stops calling its tap after some
+    /// device changes without posting a configuration change, and a process tap can be torn
+    /// down underneath us. Neither looks like a failure from here: the session goes on, the
+    /// other track keeps recording, the manifest stays perfectly consistent — and the loss
+    /// only surfaces when someone plays the recording back and finds half of it has no
+    /// microphone in it.
+    ///
+    /// Silence still produces frames, so a frame count that has not moved between two checks
+    /// means the backend stopped, not that the room went quiet.
+    private func startLivenessMonitor() {
+        let interval = configuration.livenessCheckInterval
+        guard interval > 0 else { return }
+        livenessCheck = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(interval))
+                guard !Task.isCancelled else { return }
+                await self?.checkLiveness()
+            }
+        }
+    }
+
+    private func checkLiveness() async {
+        guard isRecording else { return }
+        // Nothing is written while paused, which is exactly what a dead track looks like. Drop
+        // the baseline so the first check after resuming compares against fresh numbers.
+        guard !isPaused else {
+            lastObservedFrames.removeAll()
+            return
+        }
+
+        for track in AudioTrack.allCases {
+            guard let recorder = recorders[track] else { continue }
+            let frames = recorder.totalFrames
+            let previous = lastObservedFrames[track]
+            lastObservedFrames[track] = frames
+
+            // A track with no frames at all has not stalled — it never started, which `start`
+            // has already reported.
+            guard frames > 0, previous == frames else {
+                stalledTracks.remove(track)
+                continue
+            }
+            await restart(track, reporting: stalledTracks.insert(track).inserted)
+        }
+    }
+
+    /// Stops and starts one track's backend.
+    ///
+    /// Retried on every check for as long as the track stays dead, since a backend that could
+    /// not come back once may well come back later. Recorded only the first time, so a
+    /// microphone that never recovers leaves one clear entry instead of hundreds.
+    private func restart(_ track: AudioTrack, reporting: Bool) async {
+        guard let recorder = recorders[track], let source = sources[track] else { return }
+
+        source.stop()
+        let detail: String
+        do {
+            try source.start(into: recorder)
+            detail = "\(track.spokenName) dejó de entregar audio; se reinició"
+        } catch {
+            detail = """
+            \(track.spokenName) dejó de entregar audio y no se pudo reiniciar: \
+            \(error.localizedDescription)
+            """
+        }
+
+        guard reporting else { return }
+        await handleDeviceChange(track, detail: detail)
+    }
+
     private func startDiskMonitor() {
         let interval = configuration.diskCheckInterval
         let store = store
@@ -392,6 +483,10 @@ public actor RecordingCoordinator {
     private func cleanUp() async {
         diskCheck?.cancel()
         diskCheck = nil
+        livenessCheck?.cancel()
+        livenessCheck = nil
+        lastObservedFrames.removeAll()
+        stalledTracks.removeAll()
 
         for source in sources.values { source.stop() }
         for recorder in recorders.values { recorder.stop() }

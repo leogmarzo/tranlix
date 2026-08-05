@@ -22,6 +22,14 @@ public extension AudioTrack {
     /// The microphone never does: it is always you. Assigning it a fixed label instead of
     /// running it through a diarizer is both faster and more accurate than any model.
     var needsDiarization: Bool { self == .system }
+
+    /// How to name this track when telling the user something happened to it.
+    var spokenName: String {
+        switch self {
+        case .mic: "el micrófono"
+        case .system: "el audio del sistema"
+        }
+    }
 }
 
 /// Lets `[AudioTrack: T]` encode as a JSON object instead of a flat array of alternating
