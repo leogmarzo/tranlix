@@ -23,6 +23,7 @@ struct SessionView: View {
         VStack(spacing: 0) {
             if model.isProcessing { PipelineStrip(model: model) }
             if let failure = model.failure, !model.isProcessing { failureBanner(failure) }
+            if let problem = model.errorMessage { errorBanner(problem) }
 
             if let player = model.player {
                 TransportBar(model: model, player: player)
@@ -164,6 +165,23 @@ struct SessionView: View {
                 ? "Se está transcribiendo ahora."
                 : "El audio está guardado. La transcripción se puede volver a correr cuando quieras.")
         )
+    }
+
+    /// Something the view model could not do — read the session, rename a speaker, write an
+    /// export. Distinct from a pipeline failure: there is nothing to retry, only something to
+    /// be told. Without this the errors were set and never shown, which is worse than an alert.
+    private func errorBanner(_ message: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .foregroundStyle(.red)
+            Text(message)
+                .font(.callout)
+            Spacer()
+            Button("Cerrar") { model.errorMessage = nil }
+                .buttonStyle(.link)
+        }
+        .padding(12)
+        .background(.red.opacity(0.1))
     }
 
     private func failureBanner(_ message: String) -> some View {

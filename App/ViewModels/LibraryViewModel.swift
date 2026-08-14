@@ -26,8 +26,6 @@ final class LibraryViewModel {
         }
     }
 
-    private(set) var isSearching = false
-
     var errorMessage: String?
 
     private let environment: AppEnvironment
@@ -76,12 +74,10 @@ final class LibraryViewModel {
     /// cancelled rather than left to finish and overwrite a newer answer.
     private func scheduleSearch() {
         searchTask?.cancel()
-        isSearching = !query.isEmpty
         searchTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled, let self else { return }
             await refresh()
-            isSearching = false
         }
     }
 
