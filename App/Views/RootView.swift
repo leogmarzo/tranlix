@@ -30,12 +30,12 @@ struct RootView: View {
         }
         .task {
             environment.installPipeline(settings: settings)
-            environment.pipeline?.onRunFinished = { library.refresh() }
+            environment.pipeline?.onRunFinished = { Task { await library.refresh() } }
             // A finished recording goes straight into transcription, speakers and notes.
             // Nothing here asks the user to press three buttons in the right order.
             recorder.onSessionFinished = { handle in
-                library.refresh()
                 environment.pipeline?.start(handle)
+                Task { await library.refresh() }
             }
             await library.load()
             showRecovery = !library.recoverable.isEmpty || !library.remnants.isEmpty
@@ -51,8 +51,10 @@ struct RootView: View {
                     }
                 },
                 onDiscardRemnants: {
-                    library.deleteAllRemnants()
-                    showRecovery = !library.recoverable.isEmpty
+                    Task {
+                        await library.deleteAllRemnants()
+                        showRecovery = !library.recoverable.isEmpty
+                    }
                 },
                 onDismiss: { showRecovery = false }
             )
@@ -60,38 +62,60 @@ struct RootView: View {
     }
 
     private func sidebar(selection: Binding<SidebarSelection?>) -> some View {
-        List(selection: selection) {
+        @Bindable var library = library
+
+        return List(selection: selection) {
             Section {
                 Label("Nueva grabación", systemImage: "record.circle")
                     .tag(SidebarSelection.record)
             }
 
-            Section("Biblioteca") {
-                if library.sessions.isEmpty {
-                    Text("Todavía no hay sesiones")
+            if library.sessions.isEmpty {
+                Section {
+                    Text(library.query.isEmpty
+                        ? "Todavía no hay sesiones"
+                        : "Nada coincide con la búsqueda")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                } else {
-                    ForEach(library.sessions) { summary in
-                        LibraryRow(summary: summary)
+                }
+            } else {
+                // Grouped by when, not one flat list: a term of classes is fifty sessions, and
+                // "Hoy / Esta semana / Agosto" is how people remember which one they want.
+                ForEach(SessionGrouping.groups(for: library.sessions)) { group in
+                    Section(group.title) {
+                        ForEach(group.sessions) { summary in
+                            LibraryRow(
+                                summary: summary,
+                                isProcessing: environment.pipeline?.isRunning(summary.id) == true
+                            )
                             .tag(SidebarSelection.session(summary.id))
                             .contextMenu {
                                 Button("Borrar", role: .destructive) {
-                                    library.delete(summary)
-                                    if selection.wrappedValue == .session(summary.id) {
-                                        selection.wrappedValue = .record
+                                    Task {
+                                        await library.delete(summary)
+                                        if selection.wrappedValue == .session(summary.id) {
+                                            selection.wrappedValue = .record
+                                        }
                                     }
                                 }
                             }
+                        }
                     }
                 }
             }
         }
         .listStyle(.sidebar)
         .navigationSplitViewColumnWidth(min: 240, ideal: 280)
+        // Searches what was said, not only what the session was called — the useful question
+        // is "where did she explain regresión logística", and that word is in no title.
+        .searchable(
+            text: $library.query,
+            placement: .sidebar,
+            prompt: "Buscar en todas las sesiones"
+        )
         .toolbar {
             Button {
-                library.refresh()
+                Task { await library.refresh() }
             } label: {
                 Label("Actualizar", systemImage: "arrow.clockwise")
             }

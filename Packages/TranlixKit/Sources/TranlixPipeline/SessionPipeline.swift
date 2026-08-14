@@ -113,6 +113,14 @@ public actor SessionPipeline {
             }
         }
 
+        // After both stages that write `transcript.json` — transcription produces it, and
+        // diarization rewrites it in place to attach speakers. Built here rather than on first
+        // search so that typing into the sidebar never has to decode every transcript on the
+        // machine. Best effort: the index is derived, and search backfills a missing one.
+        if plan.stages.contains(.transcription) || plan.stages.contains(.diarization) {
+            try? await handle.rebuildIndex(now: clock())
+        }
+
         if plan.stages.contains(.notes), let notes = request.notes {
             try Task.checkCancellation()
             continuation.yield(.writingNotes)

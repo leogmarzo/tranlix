@@ -243,6 +243,29 @@ public actor SessionHandle {
         try update { $0.diarization = info }
     }
 
+    // MARK: - Search index
+
+    /// Rebuilds the searchable text from the transcript on disk.
+    ///
+    /// Called after anything that rewrites `transcript.json` — transcription, and diarization,
+    /// which rewrites it in place to attach speakers.
+    @discardableResult
+    public func rebuildIndex(now: Date = Date()) throws -> SessionIndex? {
+        guard let transcript = try readTranscript() else { return nil }
+        let index = SessionIndex(
+            sessionID: manifest.id,
+            updatedAt: now,
+            text: SessionIndex.text(of: transcript)
+        )
+        try AtomicFile.write(TranlixJSON.encode(index), to: layout.indexURL)
+        return index
+    }
+
+    public func readIndex() -> SessionIndex? {
+        guard let data = try? Data(contentsOf: layout.indexURL) else { return nil }
+        return try? TranlixJSON.decode(SessionIndex.self, from: data)
+    }
+
     // MARK: - Notes
 
     /// Records that the user allowed this session's transcript to leave the machine.

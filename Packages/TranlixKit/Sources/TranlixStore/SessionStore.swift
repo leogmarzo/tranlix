@@ -154,6 +154,60 @@ public struct SessionStore: Sendable {
         )
     }
 
+    /// Sessions whose title, speaker names or transcript text contain `query`.
+    ///
+    /// Blocking, like the rest of this type: it reads one small file per session on top of the
+    /// scan. Callers keep it off the main actor, which the library has to do for the scan
+    /// itself anyway.
+    public func search(_ query: String) throws -> [SessionSummary] {
+        let needle = query
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+        guard !needle.isEmpty else { return try listSummaries() }
+
+        return try listSummaries().filter { matches(needle, $0) }
+    }
+
+    private func matches(_ needle: String, _ summary: SessionSummary) -> Bool {
+        func contains(_ haystack: String) -> Bool {
+            haystack
+                .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+                .contains(needle)
+        }
+
+        if contains(summary.displayTitle) { return true }
+
+        // Speaker names come from the manifest, which the scan has already read, so searching
+        // for a person costs nothing extra.
+        if let manifest = try? SessionHandle.readManifest(at: summary.layout.manifestURL),
+           manifest.speakerNames.values.contains(where: contains) {
+            return true
+        }
+
+        return contains(indexText(for: summary))
+    }
+
+    /// The session's searchable text, built now if this session predates the index.
+    ///
+    /// Sessions recorded before the index existed are the normal case on any Mac that has been
+    /// using the app, so a missing one is backfilled rather than treated as empty — otherwise
+    /// the feature would only work for recordings made from today on.
+    private func indexText(for summary: SessionSummary) -> String {
+        if let data = try? Data(contentsOf: summary.layout.indexURL),
+           let index = try? TranlixJSON.decode(SessionIndex.self, from: data) {
+            return index.text
+        }
+        guard let data = try? Data(contentsOf: summary.layout.transcriptJSONURL),
+              let transcript = try? TranlixJSON.decode(Transcript.self, from: data)
+        else { return "" }
+
+        let index = SessionIndex(
+            sessionID: summary.id, updatedAt: Date(), text: SessionIndex.text(of: transcript)
+        )
+        try? AtomicFile.write(TranlixJSON.encode(index), to: summary.layout.indexURL)
+        return index.text
+    }
+
     /// Sessions that were interrupted and still have audio worth finishing.
     ///
     /// Call `reconcileInterruptedSessions` first, or a session killed before its first chunk

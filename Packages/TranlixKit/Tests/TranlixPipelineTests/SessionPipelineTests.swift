@@ -39,6 +39,27 @@ struct SessionPipelineTests {
         }
     }
 
+    @Test("a processed session is searchable straight away")
+    func chainLeavesASearchableIndex() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            let pipeline = SessionPipeline(
+                engine: StubEngine(),
+                diarizer: StubDiarizer(turns: [
+                    SpeakerTurn(speakerID: "system-1", start: 0, end: 60),
+                ]),
+                provider: StubProvider()
+            )
+
+            for try await _ in pipeline.run(session: handle, request: request()) {}
+
+            // Built here rather than on first search, so the very first thing typed into the
+            // sidebar does not have to decode every transcript on the machine.
+            let index = try #require(await handle.readIndex())
+            #expect(!index.text.isEmpty)
+        }
+    }
+
     @Test("without permission the transcript does not leave the machine")
     func noNotesWithoutPermission() async throws {
         try await withTemporaryRoot { root in
