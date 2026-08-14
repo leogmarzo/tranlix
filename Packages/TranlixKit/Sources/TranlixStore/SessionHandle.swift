@@ -24,6 +24,16 @@ public actor SessionHandle {
     /// The closure is `sending` because callers are usually other actors: handing the
     /// mutation over rather than sharing it is what lets it run here safely.
     public func update(_ mutate: sending (inout SessionManifest) throws -> Void) throws {
+        // Re-read before mutating. `SessionStore.handle(at:)` hands out a new actor per call,
+        // each with its own cached copy, and a handle can be minutes old — a transcription
+        // holds one for its whole run. Writing back a stale copy would silently undo whatever
+        // was written through another handle meanwhile, which for a rename means losing it.
+        // Last-writer-wins now applies per field instead of per whole manifest.
+        //
+        // Anything reading the manifest to decide *what* to write must therefore do so inside
+        // the closure: a guard or an index taken from the cached copy is exactly the staleness
+        // this is closing over.
+        if let fresh = try? Self.readManifest(at: layout.manifestURL) { manifest = fresh }
         var updated = manifest
         try mutate(&updated)
         try write(updated)
@@ -46,14 +56,66 @@ public actor SessionHandle {
         }
     }
 
+    // MARK: - Stages
+
+    /// Marks a stage as under way and returns the state to put back if it does not finish.
+    ///
+    /// The returned value is what makes the difference between a first pass and a re-run
+    /// visible to the stage itself, which is the only place that knows it.
+    @discardableResult
+    public func beginStage(_ stage: PipelineStage) throws -> SessionState {
+        let previous = manifest.state
+        if let running = stage.runningState {
+            try setState(running)
+        }
+        return previous
+    }
+
+    /// Records a failed stage, when the failure is one that actually breaks the session.
+    ///
+    /// Two cases deliberately do not:
+    ///
+    /// A run over a `.ready` session must not knock it out of `.ready` — the transcript and the
+    /// audio are intact and only this attempt failed. Marking it `.failed` would take a
+    /// finished recording and present it as broken, which is the opposite of the rule the rest
+    /// of this app exists to keep.
+    ///
+    /// And a stage with no state of its own cannot condemn anything. Diarization and notes are
+    /// optional and re-runnable forever from the audio, which is exactly why `SessionState`
+    /// does not have a case for them; letting them write `.failed` would give an optional step
+    /// the power to declare a perfectly good recording broken.
+    ///
+    /// Either way the failure belongs to the attempt, and the attempt is what reports it.
+    public func failStage(
+        _ stage: PipelineStage,
+        message: String,
+        previous: SessionState,
+        at date: Date
+    ) throws {
+        guard stage.runningState != nil, previous != .ready else {
+            try revertStage(to: previous)
+            return
+        }
+        try markFailed(stage: stage.rawValue, message: message, at: date)
+    }
+
+    /// Puts the state back. Cancelling is not failing.
+    public func revertStage(to previous: SessionState) throws {
+        guard manifest.state != previous else { return }
+        try setState(previous)
+    }
+
     /// Records the host time of a track's first delivered buffer.
     ///
     /// Only the first one counts: the two tracks start at slightly different instants and
     /// this is the value that lets them be aligned afterwards. Overwriting it on a later
     /// buffer would silently destroy that alignment.
     public func recordFirstBuffer(hostTime: TimeInterval, for track: AudioTrack) throws {
-        guard manifest.track(track).firstBufferHostTime == nil else { return }
         try update { manifest in
+            // Checked against what is about to be written, not against this handle's cached
+            // copy: a stale guard would let a later buffer through and overwrite the one
+            // value that makes the two tracks alignable, with nothing to show it happened.
+            guard manifest.track(track).firstBufferHostTime == nil else { return }
             var info = manifest.tracks[track] ?? TrackInfo()
             info.firstBufferHostTime = hostTime
             manifest.tracks[track] = info
@@ -100,9 +162,16 @@ public actor SessionHandle {
     }
 
     /// Closes the pause that is still open, if there is one.
+    ///
+    /// The open pause is found inside the update rather than before it: an index resolved
+    /// against a stale copy points at a different pause once the array has grown, and closing
+    /// the wrong one leaves a session that reads as though it never resumed.
     public func recordResume(at date: Date) throws {
-        guard let index = manifest.pauses.lastIndex(where: { $0.resumedAt == nil }) else { return }
-        try update { $0.pauses[index].resumedAt = date }
+        try update { manifest in
+            guard let index = manifest.pauses.lastIndex(where: { $0.resumedAt == nil })
+            else { return }
+            manifest.pauses[index].resumedAt = date
+        }
     }
 
     public func renameSpeaker(id: String, to name: String) throws {
@@ -180,8 +249,11 @@ public actor SessionHandle {
     ///
     /// Written once and never cleared by the app: it is a record of a decision, not a setting.
     public func recordTranscriptShared(at date: Date) throws {
-        guard manifest.transcriptSharedAt == nil else { return }
-        try update { $0.transcriptSharedAt = date }
+        try update { manifest in
+            // Inside, so a second writer cannot move a date that is meant to be written once.
+            guard manifest.transcriptSharedAt == nil else { return }
+            manifest.transcriptSharedAt = date
+        }
     }
 
     /// Writes a generated summary into `notas/` and returns where it landed.

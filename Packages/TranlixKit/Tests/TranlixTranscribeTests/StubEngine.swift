@@ -20,15 +20,20 @@ actor StubEngine: TranscriptionEngine {
     private var failAfter: Int?
     private var textForChunk: @Sendable (URL) -> String
 
+    /// Makes each chunk take long enough that a test can cancel partway through one.
+    private let delayPerChunk: Duration?
+
     init(
         id: EngineID = EngineID(rawValue: "stub"),
         availability: EngineAvailability = .ready,
         failAfter: Int? = nil,
+        delayPerChunk: Duration? = nil,
         textForChunk: @escaping @Sendable (URL) -> String = { $0.deletingPathExtension().lastPathComponent }
     ) {
         self.id = id
         self.availability = availability
         self.failAfter = failAfter
+        self.delayPerChunk = delayPerChunk
         self.textForChunk = textForChunk
     }
 
@@ -57,6 +62,11 @@ actor StubEngine: TranscriptionEngine {
         language _: TranscriptionLanguage,
         track: AudioTrack
     ) async throws -> [TranscriptSegment] {
+        if let delayPerChunk {
+            // Deliberately not cancellation-aware: the point of the cancellation tests is that
+            // the *pipeline* stops between chunks, not that the engine cooperates.
+            try? await Task.sleep(for: delayPerChunk)
+        }
         if let failAfter, transcribedChunks.count >= failAfter {
             throw TranscriptionError.engineFailed("stub falló a propósito")
         }

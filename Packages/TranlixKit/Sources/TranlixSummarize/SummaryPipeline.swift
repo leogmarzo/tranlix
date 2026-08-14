@@ -69,6 +69,11 @@ public actor SummaryPipeline {
             try await handle.recordTranscriptShared(at: now)
         }
 
+        // Last chance before the transcript leaves the machine. `recordTranscriptShared` above
+        // has already run, deliberately — over-recording that a send was about to happen is
+        // the safe direction — but a cancelled chain should not also spend the call.
+        try Task.checkCancellation()
+
         let markdown = try await provider.summarize(
             SummaryRequest(instruction: instruction, transcript: transcript, model: model)
         )

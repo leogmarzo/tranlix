@@ -66,13 +66,32 @@ public actor TranscriptionPipeline {
         language: TranscriptionLanguage,
         progress: @escaping @Sendable (TranscriptionPhase) -> Void
     ) async throws -> Transcript {
-        let transcript = try await transcribe(
-            session: handle, language: language, progress: progress
-        )
-        progress(.archiving)
-        try await archive(session: handle)
-        progress(.finished)
-        return transcript
+        // The state is captured here, not deduced later: only this call knows whether it is a
+        // first pass over a fresh recording or a re-run over a session that is already
+        // complete, and the two must fail very differently.
+        let previous = try await handle.beginStage(.transcription)
+        do {
+            let transcript = try await transcribe(
+                session: handle, language: language, progress: progress
+            )
+            progress(.archiving)
+            try await archive(session: handle)
+            progress(.finished)
+            return transcript
+        } catch is CancellationError {
+            try? await handle.revertStage(to: previous)
+            throw CancellationError()
+        } catch {
+            // Best effort: a session whose failure could not be recorded is still a session
+            // whose audio is on disk, and that is the thing worth protecting.
+            try? await handle.failStage(
+                .transcription,
+                message: error.localizedDescription,
+                previous: previous,
+                at: Date()
+            )
+            throw error
+        }
     }
 
     // MARK: - Transcription
@@ -92,6 +111,8 @@ public actor TranscriptionPipeline {
             throw TranscriptionError.languageNotSupported(reason, engine: engine.displayName)
         }
 
+        // `process` has normally set this already; doing it here too keeps `transcribe` usable
+        // on its own, and setting the same state twice writes the same bytes.
         try await handle.setState(.transcribing)
 
         // Scratch space for chunks rebuilt from an archive. Removed however this ends.
@@ -113,6 +134,10 @@ public actor TranscriptionPipeline {
         progress(.transcribing(completed: 0, total: total, reused: 0))
 
         for item in work {
+            // Between chunks, which bounds a cancellation to one chunk's work. Each finished
+            // chunk is already persisted, so stopping here costs nothing on the next run.
+            try Task.checkCancellation()
+
             let fingerprint = Self.fingerprint(of: item.url, frameCount: item.chunk.frameCount)
             let cached = await handle.chunkTranscript(
                 engineID: engine.id.rawValue, track: item.track, chunkIndex: item.chunk.index
@@ -229,6 +254,11 @@ public actor TranscriptionPipeline {
         let layout = await handle.layout
 
         for track in AudioTrack.allCases {
+            // Before a track, never inside one. Everything from the encode below to
+            // `removeChunks` is the one window where a recording could actually be lost, and
+            // it has to run to completion once entered.
+            try Task.checkCancellation()
+
             let info = manifest.track(track)
             guard info.archive == nil, !info.chunks.isEmpty else { continue }
 

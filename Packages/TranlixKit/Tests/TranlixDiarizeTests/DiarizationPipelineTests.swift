@@ -182,6 +182,29 @@ struct DiarizationPipelineTests {
         }
     }
 
+    @Test("applying speakers with no transcript is an error, not a quiet success")
+    func applyingWithoutATranscriptThrows() async throws {
+        try await withTemporaryRoot { root in
+            // Chained after transcription, a silent return here reports a stage-2 pass for a
+            // session whose stage 1 never produced anything — which is how a broken run ends
+            // up looking finished.
+            let handle = try await session(in: root)
+            let pipeline = DiarizationPipeline(diarizer: StubDiarizer(turns: []))
+
+            await #expect(throws: DiarizationError.self) {
+                try await pipeline.applySpeakers(
+                    Diarization(
+                        diarizerID: DiarizerID.fluidAudio.rawValue,
+                        generatedAt: Date(timeIntervalSince1970: 0),
+                        audioFingerprint: "x",
+                        turns: [SpeakerTurn(speakerID: "system-1", start: 0, end: 1)]
+                    ),
+                    to: handle
+                )
+            }
+        }
+    }
+
     @Test("the archive is preferred over the chunks once it exists")
     func prefersTheArchive() async throws {
         try await withTemporaryRoot { root in

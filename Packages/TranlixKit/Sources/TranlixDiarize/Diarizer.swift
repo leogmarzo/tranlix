@@ -28,6 +28,9 @@ public enum DiarizerAvailability: Sendable, Equatable {
 
 public enum DiarizationError: Error, LocalizedError, Equatable {
     case audioUnreadable(URL)
+
+    /// Asked to attach speakers to a session that has no transcript.
+    case transcriptMissing
     case modelUnavailable(String)
     case failed(String)
 
@@ -35,6 +38,8 @@ public enum DiarizationError: Error, LocalizedError, Equatable {
         switch self {
         case let .audioUnreadable(url):
             "No se pudo leer el audio en \(url.lastPathComponent)."
+        case .transcriptMissing:
+            "No hay transcripción a la que asignarle los hablantes."
         case let .modelUnavailable(detail):
             "El modelo de diarización no está disponible: \(detail)"
         case let .failed(detail):

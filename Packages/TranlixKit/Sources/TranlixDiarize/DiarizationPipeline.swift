@@ -76,6 +76,10 @@ public actor DiarizationPipeline {
                 throw DiarizationError.modelUnavailable(reason)
             }
 
+            // Before handing the whole track to the model. Once inside, `diarize` is a single
+            // opaque call into FluidAudio and there is nowhere finer to stop.
+            try Task.checkCancellation()
+
             let turns = try await diarizer.diarize(audio: audio.url) {
                 progress(.separatingVoices(fraction: $0))
             }
@@ -101,7 +105,15 @@ public actor DiarizationPipeline {
         }
 
         progress(.merging)
-        try await applySpeakers(diarization, to: handle)
+        do {
+            try await applySpeakers(diarization, to: handle)
+        } catch DiarizationError.transcriptMissing {
+            // Running the model before transcribing is unusual but legitimate, and the turns
+            // are the expensive half. They are already written above; there is simply nothing
+            // to merge them into yet, and `reapplyStoredSpeakers` will do it later for free.
+            // Callers that mean "attach these to the transcript" use `applySpeakers` directly
+            // and get the error.
+        }
 
         progress(.finished)
         return diarization
@@ -112,7 +124,12 @@ public actor DiarizationPipeline {
     /// Splitting this out is what makes re-transcribing cheap to fix up: a new transcript can
     /// be given the stored turns without running the model again.
     public func applySpeakers(_ diarization: Diarization, to handle: SessionHandle) async throws {
-        guard let transcript = try await handle.readTranscript() else { return }
+        // Throws rather than returning quietly. Run after transcription in a chain, a silent
+        // success here reports that speakers were attached to a session that has no transcript
+        // at all — which is exactly how a failed stage ends up looking like a finished one.
+        guard let transcript = try await handle.readTranscript() else {
+            throw DiarizationError.transcriptMissing
+        }
 
         var updated = transcript
         updated.segments = SpeakerMerger.merge(

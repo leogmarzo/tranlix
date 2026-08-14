@@ -103,6 +103,159 @@ struct SessionHandleTests {
         }
     }
 
+    // MARK: - Stages
+
+    @Test("entering transcription records it and hands back what to put down again")
+    func beginningTranscriptionMarksTheState() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try newSession(in: root)
+            try await handle.setState(.recorded)
+
+            let previous = try await handle.beginStage(.transcription)
+
+            #expect(previous == .recorded)
+            #expect(await handle.manifest.state == .transcribing)
+        }
+    }
+
+    @Test("a first-pass failure is terminal, and is not offered as an interrupted session")
+    func failingAFirstPassIsTerminal() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try newSession(in: root)
+            try await handle.setState(.recorded)
+            let previous = try await handle.beginStage(.transcription)
+
+            try await handle.failStage(
+                .transcription, message: "el motor explotó", previous: previous, at: epoch
+            )
+
+            let manifest = await handle.manifest
+            #expect(manifest.state == .failed)
+            #expect(manifest.failure?.stage == "transcription")
+            // The bug this closes: left in `.transcribing`, a failed run comes back at next
+            // launch in the recovery sheet, pretending the app crashed.
+            #expect(!manifest.state.needsRecovery)
+        }
+    }
+
+    @Test("failing a re-run does not take a finished session away from the user")
+    func failingOverAReadySessionChangesNothing() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try newSession(in: root)
+            try await handle.setState(.ready)
+            let previous = try await handle.beginStage(.diarization)
+
+            try await handle.failStage(
+                .diarization, message: "no se pudo", previous: previous, at: epoch
+            )
+
+            let manifest = await handle.manifest
+            // The transcript and the audio are intact; only this attempt failed. Presenting a
+            // complete recording as broken would be the opposite of the truth.
+            #expect(manifest.state == .ready)
+            #expect(manifest.failure == nil)
+        }
+    }
+
+    @Test("an optional stage failing never condemns the recording")
+    func failingAnOptionalStageIsNotTerminal() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try newSession(in: root)
+            try await handle.setState(.recorded)
+            let previous = try await handle.beginStage(.diarization)
+
+            try await handle.failStage(
+                .diarization, message: "no se pudo", previous: previous, at: epoch
+            )
+
+            // Diarization is deliberately not a state: it is optional and re-runnable forever
+            // from the audio. Letting it mark a session `.failed` would make an optional step
+            // able to declare a perfectly good recording broken.
+            let manifest = await handle.manifest
+            #expect(manifest.state == .recorded)
+            #expect(manifest.failure == nil)
+        }
+    }
+
+    @Test("cancelling is not failing, so the state goes back where it was")
+    func revertingRestoresThePreviousState() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try newSession(in: root)
+            try await handle.setState(.recorded)
+            let previous = try await handle.beginStage(.transcription)
+
+            try await handle.revertStage(to: previous)
+
+            let manifest = await handle.manifest
+            #expect(manifest.state == .recorded)
+            #expect(manifest.failure == nil)
+        }
+    }
+
+    // MARK: - Concurrent handles
+
+    // `SessionStore.handle(at:)` hands out a NEW actor per call, each with its own cached
+    // manifest, and every write puts the whole manifest back. Two of them are in play
+    // routinely: the pipeline holds one for the length of a transcription while the user is
+    // renaming speakers through another.
+
+    @Test("a write through one handle does not undo a write through another")
+    func concurrentHandlesDoNotClobber() async throws {
+        try await withTemporaryRoot { root in
+            let store = SessionStore(root: root)
+            let first = try newSession(in: root)
+            let second = try store.handle(at: await first.layout.root)
+
+            try await second.renameSpeaker(id: "system-1", to: "Marina")
+            // `first` has been holding a copy from before the rename.
+            try await first.setState(.transcribed)
+
+            let onDisk = try SessionHandle.readManifest(at: await first.layout.manifestURL)
+            #expect(onDisk.state == .transcribed)
+            #expect(onDisk.speakerNames["system-1"] == "Marina")
+        }
+    }
+
+    @Test("closing a pause uses the pauses on disk, not the ones this handle remembers")
+    func resumeLooksAtTheCurrentPauses() async throws {
+        try await withTemporaryRoot { root in
+            let store = SessionStore(root: root)
+            let first = try newSession(in: root)
+            let second = try store.handle(at: await first.layout.root)
+
+            // `first`'s cached copy stops here, at one open pause.
+            try await first.recordPause(PauseEvent(offset: 10, pausedAt: epoch))
+            // Another handle opens a second one. Disk now has two; `first` still sees one.
+            try await second.recordPause(PauseEvent(offset: 20, pausedAt: epoch))
+
+            try await first.recordResume(at: epoch.addingTimeInterval(5))
+
+            // An index resolved against the stale copy would close the first pause and leave
+            // the second open forever, which reads as a session that never resumed.
+            let onDisk = try SessionHandle.readManifest(at: await first.layout.manifestURL)
+            #expect(onDisk.pauses.count == 2)
+            #expect(onDisk.pauses.first?.resumedAt == nil)
+            #expect(onDisk.pauses.last?.resumedAt != nil)
+        }
+    }
+
+    @Test("a track's start time is not overwritten by a handle that never saw it")
+    func firstBufferSurvivesAStaleHandle() async throws {
+        try await withTemporaryRoot { root in
+            let store = SessionStore(root: root)
+            let first = try newSession(in: root)
+            let second = try store.handle(at: await first.layout.root)
+
+            try await second.recordFirstBuffer(hostTime: 100.25, for: .mic)
+            // `first`'s cached copy still has no start time, so its guard would let this
+            // through and destroy the only value that aligns the two tracks.
+            try await first.recordFirstBuffer(hostTime: 999, for: .mic)
+
+            let onDisk = try SessionHandle.readManifest(at: await first.layout.manifestURL)
+            #expect(onDisk.track(.mic).firstBufferHostTime == 100.25)
+        }
+    }
+
     // MARK: - Track alignment
 
     @Test("only the first buffer sets the track's start time")

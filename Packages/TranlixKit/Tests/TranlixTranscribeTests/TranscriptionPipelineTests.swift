@@ -327,6 +327,72 @@ struct TranscriptionPipelineTests {
         }
     }
 
+    @Test("a failed transcription is terminal, not an interrupted recording")
+    func failedTranscriptionIsNotOfferedForRecovery() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+
+            await #expect(throws: TranscriptionError.self) {
+                try await TranscriptionPipeline(engine: StubEngine(failAfter: 1))
+                    .process(session: handle, language: self.language, progress: { _ in })
+            }
+
+            let manifest = await handle.manifest
+            #expect(manifest.state == .failed)
+            #expect(manifest.failure?.stage == "transcription")
+            // Left in `.transcribing`, this session would come back in the recovery sheet at
+            // next launch as though the app had been killed mid-recording.
+            #expect(!manifest.state.needsRecovery)
+        }
+    }
+
+    @Test("a failed re-run leaves a finished session finished")
+    func failedRerunKeepsTheSessionReady() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            try await TranscriptionPipeline(engine: StubEngine())
+                .process(session: handle, language: language, progress: { _ in })
+            #expect(await handle.manifest.state == .ready)
+
+            await #expect(throws: TranscriptionError.self) {
+                try await TranscriptionPipeline(
+                    engine: StubEngine(id: EngineID(rawValue: "apple"), failAfter: 0)
+                ).process(session: handle, language: self.language, progress: { _ in })
+            }
+
+            let manifest = await handle.manifest
+            #expect(manifest.state == .ready)
+            #expect(manifest.failure == nil)
+        }
+    }
+
+    @Test("cancelling stops the run and puts the session back, rather than failing it")
+    func cancellingRevertsRatherThanFails() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root, micChunks: [16000, 16000, 16000])
+            try await handle.setState(.recorded)
+            let engine = StubEngine(delayPerChunk: .milliseconds(80))
+
+            let task = Task {
+                try await TranscriptionPipeline(engine: engine)
+                    .process(session: handle, language: self.language, progress: { _ in })
+            }
+            try await Task.sleep(for: .milliseconds(120))
+            task.cancel()
+            _ = try? await task.value
+
+            // Cancelling is not failing: the recording is untouched and can be run again.
+            #expect(await handle.manifest.state == .recorded)
+            #expect(await handle.manifest.failure == nil)
+
+            // And it actually stopped, instead of running on in the background while the UI
+            // claimed otherwise.
+            let afterCancel = await engine.transcribeCallCount
+            try await Task.sleep(for: .milliseconds(250))
+            #expect(await engine.transcribeCallCount == afterCancel)
+        }
+    }
+
     @Test("re-transcribing an archived session still works, and still resumes")
     func retranscribesFromArchive() async throws {
         try await withTemporaryRoot { root in
