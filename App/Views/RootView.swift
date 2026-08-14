@@ -29,7 +29,14 @@ struct RootView: View {
             detail
         }
         .task {
-            recorder.onSessionFinished = { library.refresh() }
+            environment.installPipeline(settings: settings)
+            environment.pipeline?.onRunFinished = { library.refresh() }
+            // A finished recording goes straight into transcription, speakers and notes.
+            // Nothing here asks the user to press three buttons in the right order.
+            recorder.onSessionFinished = { handle in
+                library.refresh()
+                environment.pipeline?.start(handle)
+            }
             await library.load()
             showRecovery = !library.recoverable.isEmpty || !library.remnants.isEmpty
         }

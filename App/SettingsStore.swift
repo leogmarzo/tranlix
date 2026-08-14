@@ -27,8 +27,21 @@ final class SettingsStore {
         }
     }
 
+    /// Which prompt the automatic chain uses. Nil falls back to the first template, which is
+    /// what a user who has never opened this setting expects.
+    ///
+    /// Being set is not, by itself, permission for anything: whether a session's transcript may
+    /// be sent is `NotesPolicy`'s decision and nothing else's.
+    var defaultTemplateID: UUID? {
+        didSet {
+            guard defaultTemplateID != oldValue else { return }
+            UserDefaults.standard.set(defaultTemplateID?.uuidString, forKey: Self.templateKey)
+        }
+    }
+
     private static let key = "transcriptionSettings"
     private static let summaryModelKey = "summaryModel"
+    private static let templateKey = "defaultTemplateID"
 
     init() {
         let data = UserDefaults.standard.data(forKey: Self.key)
@@ -37,6 +50,8 @@ final class SettingsStore {
             ?? TranscriptionSettings()
         summaryModel = UserDefaults.standard.string(forKey: Self.summaryModelKey)
             .flatMap(SummaryModel.init(rawValue:)) ?? .default
+        defaultTemplateID = UserDefaults.standard.string(forKey: Self.templateKey)
+            .flatMap(UUID.init(uuidString:))
     }
 
     private func persist() {

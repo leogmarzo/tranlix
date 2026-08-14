@@ -436,8 +436,17 @@ public actor RecordingCoordinator {
     ///
     /// Each recorder drains synchronously, so by the time this returns the manifest describes
     /// every sample that reached the disk.
-    public func stop(now: Date = Date()) async throws {
-        guard isRecording, let handle else { return }
+    /// - Returns: the session that just finished, or nil when nothing was recording.
+    ///
+    /// Handed back rather than left to be reopened by URL. The coordinator already holds the
+    /// handle whose manifest it has just written, and `store.handle(at:)` would read that file
+    /// into a second cached copy. The `.stopped` event carries the folder, but it goes through
+    /// an `AsyncStream` consumed by another task, so it is not guaranteed to have been
+    /// delivered by the time this returns — anything that chains off the end of a recording
+    /// needs an answer that is certain.
+    @discardableResult
+    public func stop(now: Date = Date()) async throws -> SessionHandle? {
+        guard isRecording, let handle else { return nil }
         // A session finished from a pause has an open pause event. Closing it keeps the
         // manifest honest about how long the recording was actually suspended.
         if isPaused {
@@ -463,6 +472,7 @@ public actor RecordingCoordinator {
         let layout = await handle.layout
         self.handle = nil
         emit(.stopped(layout.root))
+        return handle
     }
 
     /// Stops capture without touching the session state. Used on app termination, where the

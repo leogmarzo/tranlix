@@ -27,6 +27,17 @@ final class AppEnvironment {
     /// Where the window is pointed, kept outside the window so the menu bar can steer it.
     let navigation = AppNavigation()
 
+    /// Runs finished recordings through transcription, speakers and notes.
+    ///
+    /// Installed once by the scene, because it needs the settings store and this is built
+    /// before one exists. Outside any view so a run survives navigating away from it.
+    private(set) var pipeline: PipelineCoordinator?
+
+    func installPipeline(settings: SettingsStore) {
+        guard pipeline == nil else { return }
+        pipeline = PipelineCoordinator(environment: self, settings: settings)
+    }
+
     /// The recordings folder, remembered between launches.
     var recordingsRoot: URL {
         didSet {

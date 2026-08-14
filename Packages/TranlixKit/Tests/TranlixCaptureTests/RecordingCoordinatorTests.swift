@@ -57,6 +57,48 @@ struct RecordingCoordinatorTests {
         return config
     }
 
+    // MARK: - Handing the session over
+
+    @Test("stopping hands back the session that just finished")
+    func stopReturnsTheFinishedSession() async throws {
+        try await withTemporaryRoot { root in
+            let sources = Sources()
+            let coordinator = RecordingCoordinator(
+                store: SessionStore(root: root),
+                configuration: configuration(),
+                hostTime: { 0 },
+                sourceFactory: sources.factory()
+            )
+            let started = try await coordinator.start(
+                title: "Clase", language: .spanish, now: epoch
+            )
+
+            // Otherwise there is no supported way to learn which session to process: the
+            // coordinator nils its handle, and the `.stopped` event carries a URL through an
+            // AsyncStream that is not guaranteed to have been delivered by the time this
+            // returns.
+            let finished = try await coordinator.stop(now: epoch.addingTimeInterval(10))
+
+            #expect(await finished?.layout.root == started.layout.root)
+            #expect(await finished?.manifest.state == .recorded)
+        }
+    }
+
+    @Test("stopping when nothing is recording hands back nothing")
+    func stopWithoutASessionReturnsNil() async throws {
+        try await withTemporaryRoot { root in
+            let coordinator = RecordingCoordinator(
+                store: SessionStore(root: root),
+                configuration: configuration(),
+                hostTime: { 0 },
+                sourceFactory: Sources().factory()
+            )
+
+            let finished = try await coordinator.stop()
+            #expect(finished == nil)
+        }
+    }
+
     // MARK: - Starting
 
     @Test("both tracks start and the session is on disk before any audio arrives")

@@ -63,8 +63,12 @@ final class RecorderViewModel {
     private var pollTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
 
-    /// Called after a session finishes so the library can refresh.
-    var onSessionFinished: (() -> Void)?
+    /// Called after a session finishes, with the session that finished.
+    ///
+    /// It carries the handle because the only useful thing to do with a finished recording is
+    /// process it, and that needs to know *which* one. Taking no argument meant the app's only
+    /// possible response was to rescan the folder.
+    var onSessionFinished: ((SessionHandle) -> Void)?
 
     init(environment: AppEnvironment) {
         self.environment = environment
@@ -156,8 +160,9 @@ final class RecorderViewModel {
         pollTask?.cancel()
         pollTask = nil
 
+        var finished: SessionHandle?
         do {
-            try await environment.coordinator.stop(now: Date())
+            finished = try await environment.coordinator.stop(now: Date())
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -169,7 +174,7 @@ final class RecorderViewModel {
         eventTask?.cancel()
         eventTask = nil
         title = ""
-        onSessionFinished?()
+        if let finished { onSessionFinished?(finished) }
     }
 
     func addMarker() async {
