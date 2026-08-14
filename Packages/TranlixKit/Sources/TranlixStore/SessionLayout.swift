@@ -49,6 +49,14 @@ public struct SessionLayout: Sendable, Equatable {
         audioDirectory.appending(path: "\(track.filePrefix).m4a")
     }
 
+    /// Cached waveform peaks for a track, as raw little-endian `Float32`.
+    ///
+    /// Derived, not source: safe to delete, rebuilt on demand. Kept beside the audio it
+    /// describes so that moving or deleting a session takes it along.
+    public func peaksURL(track: AudioTrack) -> URL {
+        audioDirectory.appending(path: "\(track.filePrefix).peaks")
+    }
+
     /// Where one chunk's transcription result lives.
     ///
     /// Keyed by engine, so transcribing the same session with both engines produces two

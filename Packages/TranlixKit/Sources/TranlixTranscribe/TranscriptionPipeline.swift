@@ -242,6 +242,11 @@ public actor TranscriptionPipeline {
             // still knows where its audio is.
             try await handle.setArchive(archived, for: track)
             AudioArchiver.removeChunks(info.chunks, layout: layout)
+
+            // The waveform is derived from the file that was just written, so this is the one
+            // moment it can be computed without anybody waiting for it. Best effort: it is a
+            // cache, and failing to build it costs a decode later, never the audio.
+            _ = try? WaveformDigest.load(track: track, layout: layout)
         }
 
         try await handle.setState(.ready)

@@ -19,6 +19,7 @@ let package = Package(
                 "TranlixDiarize",
                 "TranlixExport",
                 "TranlixSummarize",
+                "TranlixPlayback",
             ]
         ),
     ],
@@ -87,6 +88,15 @@ let package = Package(
         .testTarget(
             name: "TranlixSummarizeTests",
             dependencies: ["TranlixSummarize", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
+        ),
+
+        // Reading the audio back. Depends on Store rather than the other way around: the
+        // waveform cache lives beside the archives and is written by the transcription
+        // pipeline, so the digest itself belongs in Store and only the player lives here.
+        .target(name: "TranlixPlayback", dependencies: ["TranlixModel", "TranlixStore"]),
+        .testTarget(
+            name: "TranlixPlaybackTests",
+            dependencies: ["TranlixPlayback", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
         ),
 
         // Shared test helpers. Deliberately not part of the TranlixKit product, so nothing

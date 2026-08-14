@@ -291,6 +291,21 @@ struct TranscriptionPipelineTests {
         }
     }
 
+    @Test("archiving leaves a waveform cache, so opening a session is not a decode")
+    func archivingBuildsTheWaveformCache() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let layout = await handle.layout
+
+            try await TranscriptionPipeline(engine: StubEngine())
+                .process(session: handle, language: language, progress: { _ in })
+
+            for track in AudioTrack.allCases {
+                #expect(FileManager.default.exists(layout.peaksURL(track: track)))
+            }
+        }
+    }
+
     @Test("a failed transcription leaves the audio alone")
     func failedTranscriptionDoesNotArchive() async throws {
         try await withTemporaryRoot { root in
