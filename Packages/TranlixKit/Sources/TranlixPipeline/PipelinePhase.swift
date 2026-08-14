@@ -23,6 +23,58 @@ public enum PipelinePhase: Sendable, Equatable {
         }
     }
 
+    /// One line saying what is actually happening.
+    ///
+    /// The stage name alone is not enough, and the gap is not cosmetic: loading the Whisper
+    /// model and compiling it for the Neural Engine takes minutes on a cold start, during
+    /// which the stage is "transcription" and nothing is being transcribed. Five seconds of
+    /// audio sitting on "Transcribiendo" for three minutes reads as a hang, because from the
+    /// outside it is indistinguishable from one.
+    ///
+    /// Written here rather than in the view so the wording is tested and cannot drift between
+    /// the places that show progress.
+    public var detail: String {
+        switch self {
+        case let .transcribing(phase): Self.transcriptionDetail(phase)
+        case let .diarizing(phase): Self.diarizationDetail(phase)
+        case .writingNotes: "Escribiendo las notas…"
+        case .finished: "Listo"
+        }
+    }
+
+    private static func transcriptionDetail(_ phase: TranscriptionPhase) -> String {
+        switch phase {
+        case let .preparingEngine(fraction):
+            // Past the download the system compiles the model in its own process, reporting
+            // nothing while the app sits at zero CPU. Saying so is the difference between a
+            // wait and a crash.
+            fraction < WhisperKitEngine.downloadShare
+                ? "Descargando el modelo… \(Int(fraction / WhisperKitEngine.downloadShare * 100))%"
+                : "Compilando el modelo para el Neural Engine. Solo la primera vez, puede tardar un minuto."
+        case let .transcribing(completed, total, reused):
+            reused > 0
+                ? "Transcribiendo fragmento \(completed) de \(total) · \(reused) reutilizados"
+                : "Transcribiendo fragmento \(completed) de \(total)"
+        case .archiving:
+            "Comprimiendo el audio y verificando antes de borrar los fragmentos…"
+        case .finished:
+            "Transcripción lista"
+        }
+    }
+
+    private static func diarizationDetail(_ phase: DiarizationPhase) -> String {
+        switch phase {
+        case let .preparingModel(fraction):
+            "Descargando el modelo de voces… \(Int(fraction * 100))%"
+        case let .separatingVoices(fraction):
+            "Separando voces… \(Int(fraction * 100))%"
+        case .merging:
+            "Asignando cada frase a su hablante…"
+        case .finished:
+            "Voces separadas"
+        }
+    }
+
     /// Share of this stage that is done, 0...1.
     public var stageFraction: Double {
         switch self {

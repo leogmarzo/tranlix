@@ -41,6 +41,29 @@ final class PipelineCoordinator {
 
     func isRunning(_ sessionID: UUID) -> Bool { runs[sessionID] != nil }
 
+    /// Loads the transcription model while the recording is still going.
+    ///
+    /// On a cold start the model has to be read and compiled for the Neural Engine before a
+    /// single word is transcribed, which takes minutes — so a five-second test recording spent
+    /// three minutes "transcribing" and a fifty-minute class would too. A class is long enough
+    /// to absorb all of it, and the registry keeps the loaded engine, so by the time the chain
+    /// starts there is nothing left to wait for. Failures are ignored: this is an optimisation,
+    /// and the chain prepares the engine itself anyway.
+    func warmUp(for language: SessionLanguage) {
+        let engineID = settings.transcription.engineID
+        let transcriptionLanguage = settings.language(for: language)
+        Task { [environment] in
+            let engine = await environment.engines.engine(engineID)
+            guard case .needsDownload = await engine.availability(for: transcriptionLanguage) else {
+                // `.ready` still means "on disk", not "loaded", so ask for it either way — the
+                // registry caches whatever this produces.
+                _ = try? await engine.prepare(for: transcriptionLanguage) { _ in }
+                return
+            }
+            try? await engine.prepare(for: transcriptionLanguage) { _ in }
+        }
+    }
+
     var isBusy: Bool { !runs.isEmpty }
 
     /// Starts a run: the whole chain after a recording, or one stage from the session view.

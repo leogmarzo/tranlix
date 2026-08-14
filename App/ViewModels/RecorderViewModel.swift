@@ -115,6 +115,10 @@ final class RecorderViewModel {
             return
         }
 
+        // Starts the model loading now, so the wait happens during the class rather than
+        // after it.
+        environment.pipeline?.warmUp(for: language)
+
         let coordinator = environment.coordinator
         observeEvents(of: coordinator)
 

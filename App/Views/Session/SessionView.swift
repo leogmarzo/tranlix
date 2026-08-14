@@ -194,22 +194,33 @@ private struct PipelineStrip: View {
     let model: SessionViewModel
 
     var body: some View {
-        HStack(spacing: 12) {
-            ForEach(Array(PipelineStage.allCases.enumerated()), id: \.element) { index, stage in
-                if index > 0 {
-                    Image(systemName: "chevron.compact.right")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 12) {
+                ForEach(Array(PipelineStage.allCases.enumerated()), id: \.element) { index, stage in
+                    if index > 0 {
+                        Image(systemName: "chevron.compact.right")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    step(stage)
                 }
-                step(stage)
+
+                Spacer()
+
+                ProgressView(value: fraction)
+                    .frame(width: 110)
+                Button("Cancelar") { model.cancel() }
+                    .buttonStyle(.link)
             }
 
-            Spacer()
-
-            ProgressView(value: fraction)
-                .frame(width: 110)
-            Button("Cancelar") { model.cancel() }
-                .buttonStyle(.link)
+            // The stage name alone leaves the longest wait unexplained: on a cold start the
+            // model has to load and compile before a single word is transcribed, and without
+            // this line that is three minutes of a spinner that says "Transcribiendo".
+            if let detail = model.phase?.detail {
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
