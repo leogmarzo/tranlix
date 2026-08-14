@@ -26,6 +26,62 @@ struct TemplateStoreTests {
         }
     }
 
+    @Test("a file written before kinds existed gains the templates it is missing")
+    func reconcilesAnOlderFile() async throws {
+        try await withTemporaryRoot { root in
+            // What an install from before this feature has on disk: the two templates that
+            // shipped, carrying identifiers minted at random on their first run. Seeding only
+            // happens when the file is missing, so nothing ever gave them the fixed ones —
+            // and settings, which names templates by id, could not find a single one of them.
+            let sut = store(in: root)
+            try sut.save([
+                PromptTemplate(name: "Resumen de clase", prompt: "Apuntes de la clase."),
+                PromptTemplate(name: "Notas de reunión", prompt: "Minuta de la reunión."),
+            ])
+
+            let loaded = sut.load()
+
+            for kind in SessionKind.allCases {
+                #expect(loaded.contains { $0.id == PromptTemplate.seededID(for: kind) })
+            }
+        }
+    }
+
+    @Test("reconciling keeps the prompt the user had edited")
+    func reconcilingKeepsEdits() async throws {
+        try await withTemporaryRoot { root in
+            let sut = store(in: root)
+            try sut.save([PromptTemplate(name: "Resumen de clase", prompt: "Lo mío, editado.")])
+
+            let loaded = sut.load()
+
+            // Adopting the identifier is not the same as replacing the template: the whole
+            // point of these living in a file is that they are the user's to change.
+            let lecture = loaded.first { $0.id == PromptTemplate.seededID(for: .lecture) }
+            #expect(lecture?.prompt == "Lo mío, editado.")
+        }
+    }
+
+    @Test("reconciling does not duplicate what is already there")
+    func reconcilingDoesNotDuplicate() async throws {
+        try await withTemporaryRoot { root in
+            let sut = store(in: root)
+            _ = sut.load()
+
+            #expect(sut.load().count == PromptTemplate.seeded.count)
+        }
+    }
+
+    @Test("a template the user wrote themselves survives reconciling")
+    func reconcilingKeepsCustomTemplates() async throws {
+        try await withTemporaryRoot { root in
+            let sut = store(in: root)
+            try sut.save([PromptTemplate(name: "Mío", prompt: "Lo que sea.")])
+
+            #expect(sut.load().contains { $0.name == "Mío" })
+        }
+    }
+
     @Test("every kind has a seeded template to fall back on")
     func everyKindIsSeeded() {
         for kind in SessionKind.allCases {

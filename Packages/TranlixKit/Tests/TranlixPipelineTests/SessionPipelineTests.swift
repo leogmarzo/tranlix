@@ -249,6 +249,27 @@ struct SessionPipelineTests {
         }
     }
 
+    @Test("the language rule is the last thing the model reads")
+    func languageRuleComesLast() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            try await handle.writeUserNotes("ojo — esto entra al parcial")
+            let provider = StubProvider()
+            let pipeline = pipeline(
+                classifier: StubClassifier(), provider: provider
+            )
+
+            for try await _ in pipeline.run(session: handle, request: request()) {}
+
+            // Buried in the middle it loses. The templates are written in Spanish and name
+            // their sections in Spanish, so asking for English notes while demanding a
+            // section called "Tema de la clase" is a contradiction — and the model settled it
+            // in favour of the instruction that was longer, more specific and everywhere.
+            let instruction = try #require(await provider.lastRequest?.instruction)
+            #expect(instruction.hasSuffix(NotesLanguage.rule(writingIn: .spanish)))
+        }
+    }
+
     @Test("a fixed policy overrides what the session turned out to be")
     func fixedPolicyOverridesTheSession() async throws {
         try await withTemporaryRoot { root in

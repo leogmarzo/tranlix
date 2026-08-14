@@ -162,14 +162,43 @@ public struct TemplateStore: Sendable {
     /// worse outcome than losing an edit.
     public func load() -> [PromptTemplate] {
         guard let data = try? Data(contentsOf: fileURL),
-              let templates = try? JSONDecoder().decode([PromptTemplate].self, from: data),
-              !templates.isEmpty
+              let stored = try? JSONDecoder().decode([PromptTemplate].self, from: data),
+              !stored.isEmpty
         else {
             let seeded = PromptTemplate.seeded
             try? save(seeded)
             return seeded
         }
-        return templates
+
+        let reconciled = Self.reconciled(stored)
+        if reconciled != stored { try? save(reconciled) }
+        return reconciled
+    }
+
+    /// Gives every kind a template, carrying the identifier settings names it by.
+    ///
+    /// Seeding only ever ran when this file was missing, so an install from before kinds
+    /// existed has one holding the two original templates under identifiers minted at random
+    /// on their first run. Nothing matched them to a kind, every kind fell through to whichever
+    /// template happened to be first, and a meeting correctly detected as a meeting was written
+    /// up as a class — the detection working perfectly and then being discarded.
+    ///
+    /// Matching by name before adding is what keeps that from turning into two templates called
+    /// "Resumen de clase": the one on disk *is* the seeded one, it just predates there being an
+    /// identifier to agree on. Its prompt is left exactly as the user has it.
+    static func reconciled(_ templates: [PromptTemplate]) -> [PromptTemplate] {
+        var result = templates
+        for kind in SessionKind.allCases {
+            let seeded = PromptTemplate.seeded(for: kind)
+            guard !result.contains(where: { $0.id == seeded.id }) else { continue }
+
+            if let index = result.firstIndex(where: { $0.name == seeded.name }) {
+                result[index].id = seeded.id
+            } else {
+                result.append(seeded)
+            }
+        }
+        return result
     }
 
     public func save(_ templates: [PromptTemplate]) throws {

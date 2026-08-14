@@ -169,7 +169,7 @@ public actor SessionPipeline {
         writingIn language: SessionLanguage,
         with userNotes: String?
     ) -> String {
-        var parts = [base, NotesLanguage.rule(writingIn: language), Self.citationRule]
+        var parts = [base, Self.citationRule]
         if let userNotes, !userNotes.isEmpty {
             parts.append("""
             La persona que grabó esta sesión tomó estos apuntes mientras pasaba. Son lo que a \
@@ -178,6 +178,11 @@ public actor SessionPipeline {
             \(userNotes)
             """)
         }
+
+        // Last, deliberately. Everything above it is written in Spanish — the templates, the
+        // citation rule, the user's own jottings — and from the middle of that a single line
+        // asking for another language simply lost.
+        parts.append(NotesLanguage.rule(writingIn: language))
         return parts.joined(separator: "\n\n")
     }
 

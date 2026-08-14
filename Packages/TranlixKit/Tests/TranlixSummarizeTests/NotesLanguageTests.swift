@@ -29,6 +29,19 @@ struct NotesLanguageTests {
         #expect(NotesLanguage.english.resolved(for: nil) == .english)
     }
 
+    @Test("the rule overrides a template that asks for a language itself")
+    func ruleOverridesATemplateThatNamesALanguage() {
+        // The templates that shipped before this setting existed say "escribí apuntes en
+        // español rioplatense" in their own text, and they sit on disk in every install from
+        // then, because the seeds are only ever written when the file is missing. Against an
+        // explicit instruction like that, a rule that merely stated a preference lost — an
+        // English meeting came out as Spanish notes under Spanish headings.
+        //
+        // It has to say that it wins, not just what it wants.
+        #expect(NotesLanguage.rule(writingIn: .english).lowercased().contains("ignore"))
+        #expect(NotesLanguage.rule(writingIn: .spanish).lowercased().contains("ignorá"))
+    }
+
     @Test("the default is to follow the session")
     func defaultFollowsTheSession() {
         #expect(NotesLanguage.default == .session)
