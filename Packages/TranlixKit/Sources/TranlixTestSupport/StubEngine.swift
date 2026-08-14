@@ -1,7 +1,6 @@
 import Foundation
 import TranlixModel
-
-@testable import TranlixTranscribe
+import TranlixTranscribe
 
 /// A transcription engine the test controls completely.
 ///
@@ -9,12 +8,12 @@ import TranlixModel
 /// what to persist — and none of that needs a real model. This makes those properties
 /// testable in milliseconds and lets a test force a failure at a chosen chunk, which is the
 /// case resumability exists for.
-actor StubEngine: TranscriptionEngine {
-    nonisolated let id: EngineID
-    nonisolated let displayName = "Stub"
+public actor StubEngine: TranscriptionEngine {
+    public nonisolated let id: EngineID
+    public nonisolated let displayName = "Stub"
 
-    private(set) var transcribedChunks: [URL] = []
-    private(set) var prepareCount = 0
+    public private(set) var transcribedChunks: [URL] = []
+    public private(set) var prepareCount = 0
 
     private var availability: EngineAvailability
     private var failAfter: Int?
@@ -23,7 +22,7 @@ actor StubEngine: TranscriptionEngine {
     /// Makes each chunk take long enough that a test can cancel partway through one.
     private let delayPerChunk: Duration?
 
-    init(
+    public init(
         id: EngineID = EngineID(rawValue: "stub"),
         availability: EngineAvailability = .ready,
         failAfter: Int? = nil,
@@ -37,17 +36,17 @@ actor StubEngine: TranscriptionEngine {
         self.textForChunk = textForChunk
     }
 
-    var transcribeCallCount: Int { transcribedChunks.count }
+    public var transcribeCallCount: Int { transcribedChunks.count }
 
-    func setFailAfter(_ value: Int?) {
+    public func setFailAfter(_ value: Int?) {
         failAfter = value
     }
 
-    func availability(for _: TranscriptionLanguage) async -> EngineAvailability {
+    public func availability(for _: TranscriptionLanguage) async -> EngineAvailability {
         availability
     }
 
-    func prepare(
+    public func prepare(
         for _: TranscriptionLanguage,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws {
@@ -57,7 +56,7 @@ actor StubEngine: TranscriptionEngine {
         progress(1)
     }
 
-    func transcribe(
+    public func transcribe(
         chunk url: URL,
         language _: TranscriptionLanguage,
         track: AudioTrack

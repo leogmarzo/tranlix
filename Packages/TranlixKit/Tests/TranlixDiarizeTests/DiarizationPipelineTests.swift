@@ -263,33 +263,3 @@ struct DiarizationPipelineTests {
         }
     }
 }
-
-/// A diarizer that returns what it was told to and counts how often it was asked.
-private actor StubDiarizer: Diarizer {
-    nonisolated let id = DiarizerID.fluidAudio
-    nonisolated let displayName = "Stub"
-
-    private let turns: [SpeakerTurn]
-    private(set) var runs = 0
-    private(set) var lastAudio: URL?
-
-    init(turns: [SpeakerTurn]) {
-        self.turns = turns
-    }
-
-    func availability() async -> DiarizerAvailability { .ready }
-
-    func prepare(progress: @escaping @Sendable (Double) -> Void) async throws {
-        progress(1)
-    }
-
-    func diarize(
-        audio url: URL,
-        progress: @escaping @Sendable (Double) -> Void
-    ) async throws -> [SpeakerTurn] {
-        runs += 1
-        lastAudio = url
-        progress(1)
-        return turns
-    }
-}

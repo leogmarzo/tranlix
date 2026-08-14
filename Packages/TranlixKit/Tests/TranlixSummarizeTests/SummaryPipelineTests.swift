@@ -183,24 +183,3 @@ struct SummaryPipelineTests {
         #expect(SummaryPipeline.slug("...") == "nota")
     }
 }
-
-// MARK: - Doubles
-
-private actor StubProvider: SummaryProvider {
-    private let answer: String
-    private let failure: SummaryError?
-    private(set) var calls = 0
-    private(set) var lastRequest: SummaryRequest?
-
-    init(answer: String = "Un resumen.", failure: SummaryError? = nil) {
-        self.answer = answer
-        self.failure = failure
-    }
-
-    func summarize(_ request: SummaryRequest) async throws -> String {
-        calls += 1
-        lastRequest = request
-        if let failure { throw failure }
-        return answer
-    }
-}

@@ -20,6 +20,7 @@ let package = Package(
                 "TranlixExport",
                 "TranlixSummarize",
                 "TranlixPlayback",
+                "TranlixPipeline",
             ]
         ),
     ],
@@ -99,8 +100,32 @@ let package = Package(
             dependencies: ["TranlixPlayback", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
         ),
 
+        // The only module that knows all three stages exist. Kept out of the app layer for
+        // the reason SummaryPipeline already gives about its own invariant: a rule that lives
+        // only in the UI is one refactor away from being gone, and it can be tested here.
+        .target(
+            name: "TranlixPipeline",
+            dependencies: [
+                "TranlixModel",
+                "TranlixStore",
+                "TranlixTranscribe",
+                "TranlixDiarize",
+                "TranlixSummarize",
+                "TranlixExport",
+            ]
+        ),
+        .testTarget(
+            name: "TranlixPipelineTests",
+            dependencies: ["TranlixPipeline", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
+        ),
+
         // Shared test helpers. Deliberately not part of the TranlixKit product, so nothing
-        // here can be linked into the app by accident.
-        .target(name: "TranlixTestSupport"),
+        // here can be linked into the app by accident. It depends on the stage modules so the
+        // stubs can live in one place: the chain has to drive all three at once, and three
+        // private copies of the same fake is how they drift apart.
+        .target(
+            name: "TranlixTestSupport",
+            dependencies: ["TranlixTranscribe", "TranlixDiarize", "TranlixSummarize"]
+        ),
     ]
 )
