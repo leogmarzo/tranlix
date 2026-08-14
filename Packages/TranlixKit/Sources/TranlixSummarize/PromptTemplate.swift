@@ -29,54 +29,112 @@ public struct PromptTemplate: Codable, Sendable, Equatable, Identifiable {
 }
 
 public extension PromptTemplate {
-    /// What the app ships with.
+    /// What the app ships with: one per kind of session.
     ///
-    /// Two, because the scope names two uses and they want genuinely different output: a class
-    /// is one voice explaining something and wants structure, a meeting is several people
-    /// deciding things and wants who-said-what and what happens next.
+    /// They want genuinely different output. A class is one voice explaining something and
+    /// wants structure; a meeting is several people deciding things and wants who-said-what
+    /// and what happens next; anything else wants neither imposed on it.
+    ///
+    /// None of them names a language. That is composed into every prompt from the setting, so
+    /// a template the user wrote themselves obeys it without having to know it exists.
     static var seeded: [PromptTemplate] {
-        [
-            PromptTemplate(
-                name: "Resumen de clase",
-                prompt: """
-                Sos un asistente que toma apuntes de clases universitarias.
+        SessionKind.allCases.map(seeded(for:))
+    }
 
-                A partir de la transcripción, escribí apuntes en español rioplatense con esta \
-                estructura:
+    /// The identifier of the template that ships for `kind`.
+    ///
+    /// Fixed rather than freshly minted, because settings remembers which template answers
+    /// which kind by id: regenerating them would unmap the preference on the next launch.
+    static func seededID(for kind: SessionKind) -> UUID {
+        switch kind {
+        case .lecture: UUID(uuidString: "7A9C0001-0000-4000-8000-000000000001")!
+        case .meeting: UUID(uuidString: "7A9C0002-0000-4000-8000-000000000002")!
+        case .general: UUID(uuidString: "7A9C0003-0000-4000-8000-000000000003")!
+        }
+    }
 
-                1. **Tema de la clase** — una línea.
-                2. **Conceptos principales** — cada concepto con su explicación en dos o tres \
-                oraciones, en el orden en que se dieron.
-                3. **Definiciones y fórmulas** — textuales cuando aparezcan.
-                4. **Ejemplos dados en clase**.
-                5. **Tarea, lecturas y fechas** — todo lo que haya que hacer para la próxima.
-                6. **Dudas que quedaron abiertas** — lo que se preguntó y no se respondió del todo.
+    static func seeded(for kind: SessionKind) -> PromptTemplate {
+        switch kind {
+        case .lecture: lectureTemplate
+        case .meeting: meetingTemplate
+        case .general: generalTemplate
+        }
+    }
 
-                Reglas: no inventes nada que no esté en la transcripción. Si algo se entendió \
-                mal o quedó cortado, decilo en lugar de completarlo. Si una sección no aplica, \
-                omitila.
-                """
-            ),
-            PromptTemplate(
-                name: "Notas de reunión",
-                prompt: """
-                Sos un asistente que toma minutas de reuniones de trabajo.
+    private static var lectureTemplate: PromptTemplate {
+        PromptTemplate(
+            id: seededID(for: .lecture),
+            name: "Resumen de clase",
+            prompt: """
+            Sos un asistente que toma apuntes de clases universitarias.
 
-                A partir de la transcripción, escribí una minuta en español rioplatense con \
-                esta estructura:
+            A partir de la transcripción, escribí apuntes con esta estructura:
 
-                1. **Objetivo de la reunión** — una línea.
-                2. **Temas tratados** — por tema, qué se discutió y qué posturas hubo.
-                3. **Decisiones** — qué se decidió y quién lo decidió.
-                4. **Acciones** — qué hay que hacer, quién es responsable y para cuándo. Si no \
-                se asignó responsable o fecha, escribí "sin asignar" en vez de suponerlo.
-                5. **Temas pendientes** — lo que quedó para la próxima.
+            1. **Tema de la clase** — una línea.
+            2. **Conceptos principales** — cada concepto con su explicación en dos o tres \
+            oraciones, en el orden en que se dieron.
+            3. **Definiciones y fórmulas** — textuales cuando aparezcan.
+            4. **Ejemplos dados en clase**.
+            5. **Tarea, lecturas y fechas** — todo lo que haya que hacer para la próxima.
+            6. **Dudas que quedaron abiertas** — lo que se preguntó y no se respondió del todo.
 
-                Reglas: usá los nombres tal como aparecen en la transcripción. No inventes \
-                decisiones ni compromisos que no se dijeron.
-                """
-            ),
-        ]
+            Reglas: no inventes nada que no esté en la transcripción. Si algo se entendió \
+            mal o quedó cortado, decilo en lugar de completarlo. Si una sección no aplica, \
+            omitila.
+            """
+        )
+    }
+
+    private static var meetingTemplate: PromptTemplate {
+        PromptTemplate(
+            id: seededID(for: .meeting),
+            name: "Notas de reunión",
+            prompt: """
+            Sos un asistente que toma minutas de reuniones de trabajo.
+
+            A partir de la transcripción, escribí una minuta con esta estructura:
+
+            1. **Objetivo de la reunión** — una línea.
+            2. **Temas tratados** — por tema, qué se discutió y qué posturas hubo.
+            3. **Decisiones** — qué se decidió y quién lo decidió.
+            4. **Acciones** — qué hay que hacer, quién es responsable y para cuándo. Si no \
+            se asignó responsable o fecha, escribí "sin asignar" en vez de suponerlo.
+            5. **Temas pendientes** — lo que quedó para la próxima.
+
+            Reglas: usá los nombres tal como aparecen en la transcripción. No inventes \
+            decisiones ni compromisos que no se dijeron.
+            """
+        )
+    }
+
+    /// For everything that is neither a class nor a meeting.
+    ///
+    /// The only one that does not lay out its sections, because the recordings it covers have
+    /// nothing in common: an interview, a call with a client, a talk. A fixed structure here
+    /// would reproduce the problem the other two exist to solve — headings that stay empty
+    /// because the recording was never that shape.
+    private static var generalTemplate: PromptTemplate {
+        PromptTemplate(
+            id: seededID(for: .general),
+            name: "Notas generales",
+            prompt: """
+            Sos un asistente que toma notas de grabaciones de todo tipo.
+
+            Esta grabación no es claramente una clase ni una reunión de trabajo. Antes de \
+            escribir, decidí qué secciones le sirven a esta grabación en particular y usá \
+            solamente esas. Empezá siempre por una línea que diga de qué se trató y quiénes \
+            hablaron.
+
+            Según el caso, pueden servir: los temas que se tocaron y qué se dijo de cada uno, \
+            los acuerdos o compromisos que hayan surgido, las preguntas y sus respuestas, los \
+            datos concretos que convenga no perder — nombres, números, fechas, links — y lo \
+            que quedó pendiente.
+
+            Reglas: no inventes nada que no esté en la transcripción, y no fuerces una \
+            sección que la grabación no da. Es mejor una nota corta y fiel que una larga con \
+            títulos vacíos.
+            """
+        )
     }
 }
 

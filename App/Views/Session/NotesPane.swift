@@ -1,5 +1,6 @@
 import SwiftUI
 import TranlixExport
+import TranlixModel
 
 /// The notes, read here.
 ///
@@ -36,6 +37,7 @@ struct NotesPane: View {
         HStack(spacing: 10) {
             Text(note.title)
                 .font(.title2.weight(.semibold))
+            kindMenu
             Spacer()
             Text(note.modifiedAt, format: .dateTime.day().month().hour().minute())
                 .font(.caption)
@@ -44,6 +46,34 @@ struct NotesPane: View {
                 .controlSize(.small)
                 .disabled(model.isProcessing)
         }
+    }
+
+    /// What the app took this recording to be, and the way to say otherwise.
+    ///
+    /// Shown rather than left implicit because the kind decides the shape of everything below
+    /// it — a minute over a lecture is mostly empty headings — and without it the only clue
+    /// that the app guessed wrong would be the notes themselves reading oddly.
+    private var kindMenu: some View {
+        Menu {
+            ForEach(SessionKind.allCases) { kind in
+                Button { model.setKind(kind) } label: {
+                    if kind == model.kind?.kind {
+                        Label(kind.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(kind.displayName)
+                    }
+                }
+            }
+        } label: {
+            Text(model.kind?.kind.displayName ?? "Sin clasificar")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .disabled(model.isProcessing)
+        // Why it decided that, for the times it decided wrong.
+        .help(model.kind?.reason ?? "Elegí de qué tipo es esta grabación para rehacer las notas.")
     }
 
     /// Markdown, rendered rather than shown as source, with the cited moments made clickable.

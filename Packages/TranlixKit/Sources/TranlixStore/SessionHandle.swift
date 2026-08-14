@@ -239,6 +239,19 @@ public actor SessionHandle {
         return try? TranlixJSON.decode(Diarization.self, from: data)
     }
 
+    /// Records what the session is, and how that was decided.
+    public func recordKind(_ kind: SessionKindInfo) throws {
+        try update { $0.kind = kind }
+    }
+
+    /// Records what language the transcript turned out to be in.
+    ///
+    /// Written once and then trusted: it is what the notes are written in, and a note
+    /// regenerated later should come out in the same language as the first one.
+    public func recordDetectedLanguage(_ language: SessionLanguage) throws {
+        try update { $0.detectedLanguage = language }
+    }
+
     public func setDiarizationInfo(_ info: DiarizationInfo?) throws {
         try update { $0.diarization = info }
     }

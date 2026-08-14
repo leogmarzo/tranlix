@@ -124,20 +124,36 @@ turns. The model decides, but it decides informed.
 
 **`NotesRequest` becomes a plan.** It can no longer carry a single resolved instruction,
 because the template is chosen after transcription and the request is built before the chain
-starts. It carries one template per kind, plus the already-decided kind when there is one:
+starts. It carries one template per kind:
 
 ```swift
 public struct NotesRequest: Sendable, Equatable {
     public let templates: [SessionKind: NotesTemplate]
-    public let pinned: SessionKind?
     public let model: String
+    public let language: NotesLanguage
     public let allowance: NotesAllowance
     public init?(...)   // still fails without an allowance
+    public func template(for kind: SessionKind) -> NotesTemplate
 }
 ```
 
 It keeps the property worth protecting: no `Codable`, no public memberwise initialiser, and
 holding one is still itself the proof that the rule was applied.
+
+It does *not* carry the already-decided kind, as an earlier draft of this design had it. The
+pipeline reads `manifest.kind` directly, which keeps one source of truth for what a session is
+rather than two that can disagree. A correction from the notes pane is written to the manifest
+before the run starts, so the request never needs to carry it.
+
+`template(for:)` returns a value rather than an optional: the fallback is resolved once at
+construction, so the type itself promises there is always something to run and no caller has
+to handle its absence.
+
+**The classifier is injected, not defaulted.** `SessionPipeline` takes it alongside the engine,
+the diarizer and the provider. Defaulting it to one built from `provider` would have been
+convenient and wrong: classification is a second call on the same account, and a test that
+could not tell the two apart would stop being able to assert what was sent — which is the
+load-bearing assertion of the privacy design.
 
 **Sharing is recorded before classifying.** The "record the send before sending" logic at the
 top of `SummaryPipeline.generate` is extracted into its own method. `SessionPipeline`
@@ -157,15 +173,29 @@ it, so nobody loses a preference silently. `NotesSettingsPane` shows three picke
 showed one, plus the notes-language picker. A third seeded template, "Notas generales",
 whose prompt asks the model to choose sections that fit what actually happened.
 
+The seeded templates get **fixed** identifiers rather than freshly minted ones, so that a slot
+can default to `PromptTemplate.seededID(for:)` and still mean something on the next launch.
+Minting them per call, as before, would have unmapped every preference at startup.
+
 `NotesPane` gains a menu beside the note title showing the detected kind. Choosing another
 writes `SessionKindInfo(source: .chosenByUser)` and regenerates. The `reason` is the tooltip.
 
 ### Failure behaviour
 
-A failed classification must never cost the user their notes. Network error, bad key,
-unparseable JSON — all fall back to `.general`, the note is written, and the result is
-recorded with `confidence: 0` so the menu invites a correction. Only the summarisation call
-itself can fail the notes stage, exactly as today.
+A failed classification must never cost the user their notes. All failures fall back to
+`.general` and the note is written; only the summarisation call itself can fail the notes
+stage, exactly as today. What differs is whether the fallback is remembered:
+
+- **The call succeeded but the answer was unreadable.** Recorded, with `confidence: 0`, so the
+  menu invites a correction. The model was asked and had nothing useful to say; asking again
+  would most likely produce the same thing.
+- **The call failed** — no network, bad key, rate limit. *Not* recorded. Writing `general` down
+  here would turn a network that was unreachable for one second into this session's permanent
+  answer, because detection only ever runs on a session with no kind.
+
+A template slot pointing at a deleted template falls back to the template that shipped for
+that kind, then to any template at all. `NotesRequest.init?` returns `nil` only when there are
+no templates, which is the behaviour today.
 
 A template slot pointing at a deleted template falls back to any template, then to the seeded
 one for that kind. `NotesRequest.init?` returns `nil` only when there are no templates at

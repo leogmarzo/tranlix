@@ -27,13 +27,15 @@ struct StreamTerminationTests {
         let pipeline = SessionPipeline(
             engine: StubEngine(),
             diarizer: StubDiarizer(turns: []),
-            provider: StubProvider()
+            provider: StubProvider(),
+            classifier: StubClassifier()
         )
         let request = PipelineRequest(
             language: .fixed("es-CL"),
             engineID: EngineID(rawValue: "stub"),
             notes: NotesRequest(
-                instruction: "Resumí", title: "Nota", model: "m", allowance: .confirmedByUser()
+                templates: [.general: NotesTemplate(instruction: "Resumí", title: "Nota")],
+                model: "m", allowance: .confirmedByUser()
             )
         )
 

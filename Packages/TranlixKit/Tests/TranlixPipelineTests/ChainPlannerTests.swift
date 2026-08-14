@@ -124,7 +124,8 @@ private func manifest(sampleRate: Double = 16000) -> SessionManifest {
 
 private func request(
     notes: NotesRequest? = NotesRequest(
-        instruction: "Resumí", title: "Nota", model: "m", allowance: .confirmedByUser()
+        templates: [.general: NotesTemplate(instruction: "Resumí", title: "Nota")],
+        model: "m", allowance: .confirmedByUser()
     ),
     force: Bool = false
 ) -> PipelineRequest {

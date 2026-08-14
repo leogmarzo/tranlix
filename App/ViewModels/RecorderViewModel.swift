@@ -13,7 +13,15 @@ import TranlixStore
 @Observable
 final class RecorderViewModel {
     var title = ""
-    var language: SessionLanguage = .spanish
+    /// Worked out from the audio rather than asked for.
+    ///
+    /// The pre-recording form is gone, so this was quietly forcing Spanish on every recording
+    /// — which does not merely mislabel an English class, it transcribes it with the wrong
+    /// model. Whisper detects the language on the first chunk and the rest of the session is
+    /// pinned to what it found, so a class taught in Spanish that quotes English terminology
+    /// still does not flap. On the engine that cannot detect, settings falls back to a fixed
+    /// language rather than refusing the recording.
+    var language: SessionLanguage = .auto
 
     private(set) var isRecording = false
 

@@ -189,7 +189,9 @@ public enum TranscriptRenderer {
     /// Names come from the manifest and are applied here, at render time. That is what makes
     /// renaming instant and non-destructive — and it is also why the summariser receives real
     /// names rather than `system-2`.
-    static func name(for segment: TranscriptSegment, in manifest: SessionManifest) -> String {
+    public static func name(
+        for segment: TranscriptSegment, in manifest: SessionManifest
+    ) -> String {
         if let id = segment.speakerID {
             return manifest.displayName(forSpeaker: id)
         }

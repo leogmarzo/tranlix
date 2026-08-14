@@ -44,20 +44,67 @@ public enum NotesPolicy {
     }
 }
 
-/// What the notes stage needs, in a form that cannot exist without permission.
-public struct NotesRequest: Sendable, Equatable {
+/// One prompt, and what to call the note it produces.
+public struct NotesTemplate: Sendable, Equatable {
     public let instruction: String
     public let title: String
+
+    public init(instruction: String, title: String) {
+        self.instruction = instruction
+        self.title = title
+    }
+
+    var isUsable: Bool {
+        !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+/// What the notes stage needs, in a form that cannot exist without permission.
+///
+/// Carries one template per kind rather than a single resolved instruction, because which one
+/// applies depends on what the recording turns out to be — and that is only knowable once
+/// there is a transcript, which is after this request has been built.
+public struct NotesRequest: Sendable, Equatable {
+    public let templates: [SessionKind: NotesTemplate]
     public let model: String
+
+    /// What language to write in. Carried here rather than read from settings downstream so
+    /// that the run is decided entirely by the request, and a test can vary it.
+    public let language: NotesLanguage
+
     public let allowance: NotesAllowance
 
+    /// What an unmatched kind gets. Chosen once, at construction, so the type can promise that
+    /// there is always a template to run and no caller has to handle its absence.
+    private let fallback: NotesTemplate
+
     /// Fails without an allowance, or with nothing to ask the model for.
-    public init?(instruction: String, title: String, model: String, allowance: NotesAllowance?) {
-        let trimmed = instruction.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let allowance, !trimmed.isEmpty else { return nil }
-        self.instruction = trimmed
-        self.title = title
+    public init?(
+        templates: [SessionKind: NotesTemplate],
+        model: String,
+        language: NotesLanguage = .default,
+        allowance: NotesAllowance?
+    ) {
+        let usable = templates.filter(\.value.isUsable)
+
+        // `general` is preferred as the stand-in because it is the one written not to assume a
+        // structure; past that, a fixed order, so two runs of the same session agree.
+        let stand = usable[.general] ?? SessionKind.allCases.compactMap { usable[$0] }.first
+        guard let allowance, let stand else { return nil }
+
+        self.templates = usable
         self.model = model
+        self.language = language
         self.allowance = allowance
+        fallback = stand
+    }
+
+    /// The template to use for a session of this kind.
+    ///
+    /// Falls back rather than producing nothing: a settings slot can point at a template the
+    /// user has since deleted, and notes in the wrong shape beat an empty pane and a silent
+    /// failure.
+    public func template(for kind: SessionKind) -> NotesTemplate {
+        templates[kind] ?? fallback
     }
 }

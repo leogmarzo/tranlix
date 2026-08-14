@@ -27,21 +27,39 @@ final class SettingsStore {
         }
     }
 
-    /// Which prompt the automatic chain uses. Nil falls back to the first template, which is
-    /// what a user who has never opened this setting expects.
+    /// Which prompt answers which kind of session.
+    ///
+    /// Replaces the single default template this used to hold. Now that the kind is worked out
+    /// per session, one prompt for everything would defeat the point of working it out.
     ///
     /// Being set is not, by itself, permission for anything: whether a session's transcript may
     /// be sent is `NotesPolicy`'s decision and nothing else's.
-    var defaultTemplateID: UUID? {
+    var templateIDs: [SessionKind: UUID] {
         didSet {
-            guard defaultTemplateID != oldValue else { return }
-            UserDefaults.standard.set(defaultTemplateID?.uuidString, forKey: Self.templateKey)
+            guard templateIDs != oldValue else { return }
+            let stored = templateIDs.reduce(into: [String: String]()) { result, pair in
+                result[pair.key.rawValue] = pair.value.uuidString
+            }
+            guard let data = try? JSONEncoder().encode(stored) else { return }
+            UserDefaults.standard.set(data, forKey: Self.templateIDsKey)
+        }
+    }
+
+    /// What language the notes come out in, whatever language was spoken.
+    var notesLanguage: NotesLanguage {
+        didSet {
+            guard notesLanguage != oldValue else { return }
+            UserDefaults.standard.set(notesLanguage.rawValue, forKey: Self.notesLanguageKey)
         }
     }
 
     private static let key = "transcriptionSettings"
     private static let summaryModelKey = "summaryModel"
-    private static let templateKey = "defaultTemplateID"
+    private static let templateIDsKey = "notesTemplateIDs"
+    private static let notesLanguageKey = "notesLanguage"
+
+    /// The one-template-for-everything preference, read only to migrate it.
+    private static let legacyTemplateKey = "defaultTemplateID"
 
     init() {
         let data = UserDefaults.standard.data(forKey: Self.key)
@@ -50,8 +68,31 @@ final class SettingsStore {
             ?? TranscriptionSettings()
         summaryModel = UserDefaults.standard.string(forKey: Self.summaryModelKey)
             .flatMap(SummaryModel.init(rawValue:)) ?? .default
-        defaultTemplateID = UserDefaults.standard.string(forKey: Self.templateKey)
-            .flatMap(UUID.init(uuidString:))
+        notesLanguage = UserDefaults.standard.string(forKey: Self.notesLanguageKey)
+            .flatMap(NotesLanguage.init(rawValue:)) ?? .default
+        templateIDs = Self.loadTemplateIDs()
+    }
+
+    private static func loadTemplateIDs() -> [SessionKind: UUID] {
+        if let data = UserDefaults.standard.data(forKey: templateIDsKey),
+           let stored = try? JSONDecoder().decode([String: String].self, from: data) {
+            let mapped = stored.reduce(into: [SessionKind: UUID]()) { result, pair in
+                guard let kind = SessionKind(rawValue: pair.key),
+                      let id = UUID(uuidString: pair.value)
+                else { return }
+                result[kind] = id
+            }
+            if !mapped.isEmpty { return mapped }
+        }
+
+        // Before kinds existed one template answered every session. Seeding all three slots
+        // with it keeps the preference the user actually set rather than silently dropping it.
+        if let legacy = UserDefaults.standard.string(forKey: legacyTemplateKey)
+            .flatMap(UUID.init(uuidString:)) {
+            return SessionKind.allCases.reduce(into: [:]) { $0[$1] = legacy }
+        }
+
+        return SessionKind.allCases.reduce(into: [:]) { $0[$1] = PromptTemplate.seededID(for: $1) }
     }
 
     private func persist() {

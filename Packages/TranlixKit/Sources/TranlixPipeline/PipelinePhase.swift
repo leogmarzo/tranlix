@@ -11,6 +11,14 @@ import TranlixTranscribe
 public enum PipelinePhase: Sendable, Equatable {
     case transcribing(TranscriptionPhase)
     case diarizing(DiarizationPhase)
+
+    /// Working out whether this was a class, a meeting or something else.
+    ///
+    /// Part of the notes stage rather than a stage of its own: it cannot be run on its own,
+    /// and promoting it would leak into `ChainPlanner`, `SessionState` and the manual buttons
+    /// for something that takes a second and a half.
+    case classifying
+
     case writingNotes
     case finished
 
@@ -18,7 +26,7 @@ public enum PipelinePhase: Sendable, Equatable {
         switch self {
         case .transcribing: .transcription
         case .diarizing: .diarization
-        case .writingNotes: .notes
+        case .classifying, .writingNotes: .notes
         case .finished: nil
         }
     }
@@ -37,6 +45,7 @@ public enum PipelinePhase: Sendable, Equatable {
         switch self {
         case let .transcribing(phase): Self.transcriptionDetail(phase)
         case let .diarizing(phase): Self.diarizationDetail(phase)
+        case .classifying: "Viendo de qué se trata la grabación…"
         case .writingNotes: "Escribiendo las notas…"
         case .finished: "Listo"
         }
@@ -80,7 +89,8 @@ public enum PipelinePhase: Sendable, Equatable {
         switch self {
         case let .transcribing(phase): phase.fraction
         case let .diarizing(phase): phase.fraction
-        case .writingNotes: 0.5
+        case .classifying: 0.2
+        case .writingNotes: 0.6
         case .finished: 1
         }
     }

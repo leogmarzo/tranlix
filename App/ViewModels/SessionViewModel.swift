@@ -171,6 +171,32 @@ final class SessionViewModel {
         run(stages: [.notes], notesConfirmed: true)
     }
 
+    /// What the app took this recording to be, once anything has decided.
+    var kind: SessionKindInfo? { manifest?.kind }
+
+    /// Says what this recording actually was, and rewrites the notes to match.
+    ///
+    /// Recorded as `chosenByUser`, which is what makes it final: the chain only works a kind
+    /// out for a session that has none, so nothing will quietly overrule this later.
+    func setKind(_ kind: SessionKind) {
+        guard !isProcessing, kind != self.kind?.kind else { return }
+        Task {
+            guard let handle = try? environment.store.handle(at: summary.layout.root) else {
+                return
+            }
+            do {
+                try await handle.recordKind(SessionKindInfo(
+                    kind: kind, source: .chosenByUser, decidedAt: Date()
+                ))
+            } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
+            await reload()
+            generateNotes()
+        }
+    }
+
     private func run(
         stages: Set<PipelineStage>,
         force: Bool = false,

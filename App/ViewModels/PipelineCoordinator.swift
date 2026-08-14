@@ -101,10 +101,14 @@ final class PipelineCoordinator {
         let request = await makeRequest(
             for: manifest, stages: stages, force: force, notesConfirmed: notesConfirmed
         )
+        // One provider, two uses: working out what the recording is, and then writing it up.
+        // The classifier pins itself to the cheap model, so this does not inherit the setting.
+        let provider = AnthropicProvider()
         let pipeline = await SessionPipeline(
             engine: environment.engines.engine(settings.transcription.engineID),
             diarizer: environment.diarizer,
-            provider: AnthropicProvider()
+            provider: provider,
+            classifier: ModelSessionClassifier(provider: provider)
         )
 
         failures[sessionID] = nil
@@ -147,13 +151,23 @@ final class PipelineCoordinator {
     private func notesRequest(for manifest: SessionManifest, confirmed: Bool) -> NotesRequest? {
         guard APIKeyStore().hasKey else { return nil }
         let templates = TemplateStore().load()
-        let template = templates.first { $0.id == settings.defaultTemplateID } ?? templates.first
-        guard let template else { return nil }
+
+        // All three travel with the request. Which one applies depends on what the recording
+        // turns out to be, and that is only knowable once the chain has produced a transcript.
+        let byKind = SessionKind.allCases.reduce(into: [SessionKind: NotesTemplate]()) { result, kind in
+            // The slot, then the template that shipped for this kind, then anything at all —
+            // a slot can point at a template the user has since deleted.
+            let chosen = templates.first { $0.id == settings.templateIDs[kind] }
+                ?? templates.first { $0.id == PromptTemplate.seededID(for: kind) }
+                ?? templates.first
+            guard let chosen else { return }
+            result[kind] = NotesTemplate(instruction: chosen.prompt, title: chosen.name)
+        }
 
         return NotesRequest(
-            instruction: template.prompt,
-            title: template.name,
+            templates: byKind,
             model: settings.summaryModel.identifier,
+            language: settings.notesLanguage,
             // Asking is the other way to earn permission: a session past the automatic limit
             // is not forbidden, it just does not go on its own.
             allowance: confirmed ? .confirmedByUser() : NotesPolicy.allowance(for: manifest)

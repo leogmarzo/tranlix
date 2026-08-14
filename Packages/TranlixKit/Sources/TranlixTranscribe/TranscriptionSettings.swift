@@ -28,13 +28,24 @@ public struct TranscriptionSettings: Sendable, Codable, Equatable {
         self.englishLocaleIdentifier = englishLocaleIdentifier
     }
 
+    /// What to hand the engine for a session recorded in `sessionLanguage`.
+    ///
+    /// `auto` only survives as `.automatic` on an engine that can act on it. Apple's
+    /// transcriber is built around a chosen locale, and `ChainPlanner` treats an engine that
+    /// cannot run the requested language as a refusal of the entire chain — so leaving this
+    /// alone would mean that choosing that engine stopped every recording from being processed
+    /// at all. Falling back to the configured Spanish is worse than detecting and better than
+    /// refusing.
     public func language(for sessionLanguage: SessionLanguage) -> TranscriptionLanguage {
         switch sessionLanguage {
         case .spanish: .fixed(spanishLocaleIdentifier)
         case .english: .fixed(englishLocaleIdentifier)
-        case .auto: .automatic
+        case .auto: canDetectLanguage ? .automatic : .fixed(spanishLocaleIdentifier)
         }
     }
+
+    /// Whether the chosen engine can work the language out for itself.
+    public var canDetectLanguage: Bool { engineID != .apple }
 
     /// Spanish variants worth offering, most to least likely to suit Rioplatense.
     public static let spanishOptions: [(identifier: String, name: String)] = [

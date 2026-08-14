@@ -23,7 +23,8 @@ struct SessionPipelineTests {
                 diarizer: StubDiarizer(turns: [
                     SpeakerTurn(speakerID: "system-1", start: 0, end: 60),
                 ]),
-                provider: provider
+                provider: provider,
+                classifier: StubClassifier()
             )
 
             var seen: [PipelineStage] = []
@@ -48,7 +49,8 @@ struct SessionPipelineTests {
                 diarizer: StubDiarizer(turns: [
                     SpeakerTurn(speakerID: "system-1", start: 0, end: 60),
                 ]),
-                provider: StubProvider()
+                provider: StubProvider(),
+                classifier: StubClassifier()
             )
 
             for try await _ in pipeline.run(session: handle, request: request()) {}
@@ -66,7 +68,8 @@ struct SessionPipelineTests {
             let handle = try await recordedSession(in: root)
             let provider = StubProvider()
             let pipeline = SessionPipeline(
-                engine: StubEngine(), diarizer: StubDiarizer(turns: []), provider: provider
+                engine: StubEngine(), diarizer: StubDiarizer(turns: []), provider: provider,
+                classifier: StubClassifier()
             )
 
             for try await _ in pipeline.run(session: handle, request: request(notes: nil)) {}
@@ -88,7 +91,8 @@ struct SessionPipelineTests {
 
             let provider = StubProvider()
             let pipeline = SessionPipeline(
-                engine: StubEngine(), diarizer: StubDiarizer(turns: []), provider: provider
+                engine: StubEngine(), diarizer: StubDiarizer(turns: []), provider: provider,
+                classifier: StubClassifier()
             )
 
             for try await _ in pipeline.run(session: handle, request: request()) {}
@@ -107,7 +111,8 @@ struct SessionPipelineTests {
             let provider = StubProvider()
             let diarizer = StubDiarizer(turns: [])
             let pipeline = SessionPipeline(
-                engine: StubEngine(failAfter: 0), diarizer: diarizer, provider: provider
+                engine: StubEngine(failAfter: 0), diarizer: diarizer, provider: provider,
+                classifier: StubClassifier()
             )
 
             await #expect(throws: (any Error).self) {
@@ -130,7 +135,8 @@ struct SessionPipelineTests {
             let pipeline = SessionPipeline(
                 engine: StubEngine(),
                 diarizer: StubDiarizer(turns: [], failure: .failed("el modelo explotó")),
-                provider: provider
+                provider: provider,
+                classifier: StubClassifier()
             )
 
             for try await _ in pipeline.run(session: handle, request: request()) {}
@@ -149,7 +155,8 @@ struct SessionPipelineTests {
             let pipeline = SessionPipeline(
                 engine: StubEngine(availability: .unsupported(reason: "sin idioma")),
                 diarizer: StubDiarizer(turns: []),
-                provider: StubProvider()
+                provider: StubProvider(),
+                classifier: StubClassifier()
             )
 
             await #expect(throws: (any Error).self) {
@@ -162,15 +169,287 @@ struct SessionPipelineTests {
             #expect(manifest.failure == nil)
         }
     }
+
+    // MARK: - Language
+
+    @Test("the language the session turned out to be in is worked out and recorded")
+    func recordsTheDetectedLanguage() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            let pipeline = SessionPipeline(
+                engine: StubEngine(textForChunk: { _ in Self.spanishSpeech }),
+                diarizer: StubDiarizer(turns: []),
+                provider: StubProvider(),
+                classifier: StubClassifier()
+            )
+
+            for try await _ in pipeline.run(session: handle, request: request()) {}
+
+            #expect(await handle.manifest.detectedLanguage == .spanish)
+        }
+    }
+
+    @Test("a transcript with nothing to go on leaves the language unknown")
+    func leavesTheLanguageUnknownWhenItCannotTell() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            // The stub's default text is a file name, which is not a language. Recording a
+            // guess made from that would be worse than recording nothing.
+            let pipeline = SessionPipeline(
+                engine: StubEngine(),
+                diarizer: StubDiarizer(turns: []),
+                provider: StubProvider(),
+                classifier: StubClassifier()
+            )
+
+            for try await _ in pipeline.run(session: handle, request: request()) {}
+
+            #expect(await handle.manifest.detectedLanguage == nil)
+        }
+    }
+
+    @Test("an English session is asked for notes in English")
+    func englishSessionAsksForEnglishNotes() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            let provider = StubProvider()
+            let pipeline = SessionPipeline(
+                engine: StubEngine(textForChunk: { _ in Self.englishSpeech }),
+                diarizer: StubDiarizer(turns: []),
+                provider: provider,
+                classifier: StubClassifier()
+            )
+
+            for try await _ in pipeline.run(session: handle, request: request()) {}
+
+            let instruction = try #require(await provider.lastRequest?.instruction)
+            #expect(instruction.contains("in English"))
+            // The templates used to say "en español rioplatense" themselves, which is why an
+            // English meeting produced a Spanish minute no matter how good the transcript was.
+            #expect(!instruction.contains("español rioplatense"))
+        }
+    }
+
+    @Test("a session in the app's own language is asked for Rioplatense")
+    func spanishSessionAsksForRioplatense() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            let provider = StubProvider()
+            let pipeline = SessionPipeline(
+                engine: StubEngine(textForChunk: { _ in Self.spanishSpeech }),
+                diarizer: StubDiarizer(turns: []),
+                provider: provider,
+                classifier: StubClassifier()
+            )
+
+            for try await _ in pipeline.run(session: handle, request: request()) {}
+
+            let instruction = try #require(await provider.lastRequest?.instruction)
+            #expect(instruction.contains("español rioplatense"))
+        }
+    }
+
+    @Test("a fixed policy overrides what the session turned out to be")
+    func fixedPolicyOverridesTheSession() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            let provider = StubProvider()
+            let pipeline = SessionPipeline(
+                engine: StubEngine(textForChunk: { _ in Self.englishSpeech }),
+                diarizer: StubDiarizer(turns: []),
+                provider: provider,
+                classifier: StubClassifier()
+            )
+
+            for try await _ in pipeline.run(
+                session: handle, request: request(notes: notesRequest(language: .spanish))
+            ) {}
+
+            let instruction = try #require(await provider.lastRequest?.instruction)
+            #expect(instruction.contains("español rioplatense"))
+            #expect(!instruction.contains("in English"))
+        }
+    }
+
+    // MARK: - Session kind
+
+    @Test("a session with no kind is worked out and the answer recorded")
+    func classifiesASessionWithNoKind() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            let classifier = StubClassifier()
+            let pipeline = pipeline(classifier: classifier)
+
+            for try await _ in pipeline.run(session: handle, request: request()) {}
+
+            #expect(await classifier.calls == 1)
+            let kind = try #require(await handle.manifest.kind)
+            #expect(kind.kind == .lecture)
+            #expect(kind.source == .detected)
+            #expect(kind.reason != nil)
+        }
+    }
+
+    @Test("a kind the user chose is never replaced by one the app worked out")
+    func userChosenKindIsNotReclassified() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            try await handle.recordKind(SessionKindInfo(
+                kind: .meeting, source: .chosenByUser, decidedAt: epoch
+            ))
+            let classifier = StubClassifier()
+
+            for try await _ in pipeline(classifier: classifier)
+                .run(session: handle, request: request()) {}
+
+            // Not merely "the value survived": the call never happened, which is what makes a
+            // correction stick and what stops the app paying for it on every regeneration.
+            #expect(await classifier.calls == 0)
+            #expect(await handle.manifest.kind?.kind == .meeting)
+        }
+    }
+
+    @Test("the template that matches the kind is the one that runs")
+    func kindPicksTheTemplate() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            let provider = StubProvider()
+            let pipeline = pipeline(
+                classifier: StubClassifier(
+                    result: SessionClassification(kind: .meeting, confidence: 0.8)
+                ),
+                provider: provider
+            )
+
+            for try await _ in pipeline.run(session: handle, request: request()) {}
+
+            let instruction = try #require(await provider.lastRequest?.instruction)
+            #expect(instruction.contains("MINUTA"))
+            #expect(!instruction.contains("APUNTES"))
+        }
+    }
+
+    @Test("a classifier that cannot answer does not cost the session its notes")
+    func classifierFailureStillProducesNotes() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            let provider = StubProvider()
+            let pipeline = pipeline(
+                classifier: StubClassifier(failure: SummaryError.rateLimited),
+                provider: provider
+            )
+
+            for try await _ in pipeline.run(session: handle, request: request()) {}
+
+            #expect(await provider.calls == 1)
+            #expect(await handle.notes().count == 1)
+        }
+    }
+
+    @Test("a classification that failed is not recorded, so the next run tries again")
+    func failedClassificationIsNotRemembered() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            let pipeline = pipeline(classifier: StubClassifier(failure: SummaryError.rateLimited))
+
+            for try await _ in pipeline.run(session: handle, request: request()) {}
+
+            // Recording `general` here would pin a session to the wrong kind for good because
+            // the network happened to be down for a second.
+            #expect(await handle.manifest.kind == nil)
+        }
+    }
+
+    @Test("the transcript is recorded as shared before the classifier ever sees it")
+    func sharingIsRecordedBeforeClassifying() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            // Classifying sends the transcript too. If it ran before the manifest said so, a
+            // failure halfway would leave the transcript sent and the record denying it.
+            let pipeline = pipeline(classifier: StubClassifier(failure: SummaryError.rateLimited))
+
+            for try await _ in pipeline.run(session: handle, request: request()) {}
+
+            #expect(await handle.manifest.transcriptSharedAt != nil)
+        }
+    }
+
+    @Test("without permission nothing is classified either")
+    func noAllowanceMeansNoClassification() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            let classifier = StubClassifier()
+
+            for try await _ in pipeline(classifier: classifier)
+                .run(session: handle, request: request(notes: nil)) {}
+
+            #expect(await classifier.calls == 0)
+            #expect(await handle.manifest.transcriptSharedAt == nil)
+        }
+    }
+
+    @Test("the run says it is working out what the recording is")
+    func classifyingIsReported() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            var phases: [PipelinePhase] = []
+
+            for try await phase in pipeline(classifier: StubClassifier())
+                .run(session: handle, request: request()) {
+                phases.append(phase)
+            }
+
+            // A second and a half of silence would otherwise be the only unnarrated pause in a
+            // chain that explains everything else it does.
+            #expect(phases.contains(.classifying))
+            #expect(PipelinePhase.classifying.detail.isEmpty == false)
+        }
+    }
+
+    private func pipeline(
+        classifier: any SessionClassifier,
+        provider: StubProvider = StubProvider()
+    ) -> SessionPipeline {
+        SessionPipeline(
+            engine: StubEngine(textForChunk: { _ in Self.spanishSpeech }),
+            diarizer: StubDiarizer(turns: []),
+            provider: provider,
+            classifier: classifier
+        )
+    }
+
+    private static let englishSpeech = """
+    All right, let us get started with today's topic, which is the normal distribution. Last \
+    week we covered the mean and the standard deviation, and now we will see how they combine.
+    """
+
+    private static let spanishSpeech = """
+    Bueno, arranquemos con el tema de hoy, que es la distribución normal. La clase pasada \
+    vimos la media y el desvío estándar, y ahora vamos a ver cómo se combinan entre sí.
+    """
 }
 
 // MARK: - Fixtures
 
-private func request(
-    notes: NotesRequest? = NotesRequest(
-        instruction: "Resumí la clase", title: "Nota", model: "m",
+private func notesRequest(language: NotesLanguage = .session) -> NotesRequest? {
+    NotesRequest(
+        templates: [
+            .lecture: NotesTemplate(
+                instruction: "Escribí APUNTES de la clase", title: "Resumen de clase"
+            ),
+            .meeting: NotesTemplate(
+                instruction: "Escribí la MINUTA de la reunión", title: "Notas de reunión"
+            ),
+            .general: NotesTemplate(instruction: "Resumí lo que pasó", title: "Notas"),
+        ],
+        model: "m",
+        language: language,
         allowance: .confirmedByUser()
     )
+}
+
+private func request(
+    notes: NotesRequest? = notesRequest()
 ) -> PipelineRequest {
     PipelineRequest(
         language: .fixed("es-CL"),

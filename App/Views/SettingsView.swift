@@ -114,6 +114,16 @@ private struct TranscriptionSettingsPane: View {
                 Text("No existe una variante rioplatense: el motor de Apple ofrece es-CL, es-MX, es-US y es-ES. Whisper ignora la región y transcribe español a secas.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                // The fallback is silent otherwise, and looks like the detection simply not
+                // working rather than like the engine being unable to do it.
+                Text(
+                    settings.transcription.canDetectLanguage
+                        ? "El idioma se detecta solo: Whisper lo reconoce en el primer fragmento y el resto de la sesión se transcribe con ese, así una clase en español que cita términos en inglés no se parte al medio."
+                        : "El motor de Apple no puede detectar el idioma — necesita un idioma fijo — así que las grabaciones se transcriben en español. Para que se detecte solo, usá Whisper."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Section("Modelos") {

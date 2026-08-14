@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import TranlixModel
 import TranlixSummarize
 
 /// The API key, the model, and the prompt templates.
@@ -60,13 +61,28 @@ struct NotesSettingsPane: View {
             }
 
             Section("Plantillas") {
-                // Which one the automatic chain uses. Without this the preference existed and
-                // was unreachable: every session got whichever template happened to be first.
-                Picker("Al terminar de grabar", selection: $settings.defaultTemplateID) {
-                    ForEach(templates) { template in
-                        Text(template.name).tag(Optional(template.id))
+                // One per kind. The app works out what a recording was; these say what to do
+                // about each answer.
+                ForEach(SessionKind.allCases) { kind in
+                    Picker(kind.displayName, selection: template(for: kind)) {
+                        ForEach(templates) { template in
+                            Text(template.name).tag(Optional(template.id))
+                        }
                     }
                 }
+                Text("Tranlix se fija solo si la grabación fue una clase, una reunión u otra cosa, y usa la plantilla que corresponda. Si se equivoca, lo corregís en el panel de notas de esa sesión.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Picker("Idioma de las notas", selection: $settings.notesLanguage) {
+                    ForEach(NotesLanguage.allCases) { language in
+                        Text(language.displayName).tag(language)
+                    }
+                }
+                Text("El transcript siempre sale en el idioma que se haya hablado. Esto decide solamente en qué idioma se escriben las notas.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 Text("Las notas se generan solas al terminar, salvo que la grabación pase de cuatro horas — ahí hay que pedirlas a mano.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -117,12 +133,30 @@ struct NotesSettingsPane: View {
     private func reload() {
         templates = store.load()
         storedKeyHint = ((try? keys.read()) ?? nil).map(Self.hint)
+        repointDanglingSlots()
+    }
 
-        // The picker needs a selection that exists, and the chain falls back to the first
-        // template anyway — so show which one that actually is rather than an empty control.
-        if settings.defaultTemplateID == nil
-            || !templates.contains(where: { $0.id == settings.defaultTemplateID }) {
-            settings.defaultTemplateID = templates.first?.id
+    private func template(for kind: SessionKind) -> Binding<UUID?> {
+        Binding(
+            get: { settings.templateIDs[kind] },
+            set: { settings.templateIDs[kind] = $0 }
+        )
+    }
+
+    /// Points every kind at a template that still exists.
+    ///
+    /// A picker needs a selection that exists, and a template can be deleted after being
+    /// chosen for a kind. The chain falls back on its own either way, so this is about showing
+    /// which template will actually run rather than an empty control that implies none will.
+    private func repointDanglingSlots() {
+        for kind in SessionKind.allCases {
+            let current = settings.templateIDs[kind]
+            guard current == nil || !templates.contains(where: { $0.id == current }) else {
+                continue
+            }
+            settings.templateIDs[kind] = templates
+                .first { $0.id == PromptTemplate.seededID(for: kind) }?.id
+                ?? templates.first?.id
         }
     }
 
@@ -174,6 +208,8 @@ struct NotesSettingsPane: View {
         do {
             try store.save(updated)
             templates = updated
+            // Deleting a template can orphan the kind that pointed at it.
+            repointDanglingSlots()
         } catch {
             errorMessage = error.localizedDescription
         }

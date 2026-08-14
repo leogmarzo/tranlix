@@ -29,6 +29,21 @@ public struct SessionManifest: Codable, Sendable, Equatable {
     /// this says what really happened, not what would happen today.
     public var resolvedLocaleIdentifier: String?
 
+    /// What this recording is — a class, a meeting, something else — and how that was decided.
+    ///
+    /// `nil` until anything has worked it out, which is also the signal that it may be:
+    /// detection runs only on a session with no kind, so it can never overwrite a choice.
+    public var kind: SessionKindInfo?
+
+    /// The language the finished transcript turned out to be in.
+    ///
+    /// Distinct from both `language`, which is what was asked for and may be `auto`, and
+    /// `resolvedLocaleIdentifier`, which is the locale an engine was handed. This one is about
+    /// the words: worked out from the whole transcript once it exists, and what the notes are
+    /// written in. `nil` when there was not enough text to tell, or when it is neither of the
+    /// two languages the app supports.
+    public var detectedLanguage: SessionLanguage?
+
     /// Capture sample rate for both tracks. 16 kHz is what every speech model wants, so
     /// recording at it avoids a resampling pass later.
     public var sampleRate: Double
@@ -72,6 +87,8 @@ public struct SessionManifest: Codable, Sendable, Equatable {
         state: SessionState = .recording,
         language: SessionLanguage,
         resolvedLocaleIdentifier: String? = nil,
+        kind: SessionKindInfo? = nil,
+        detectedLanguage: SessionLanguage? = nil,
         sampleRate: Double = 16000,
         tracks: [AudioTrack: TrackInfo] = [.mic: TrackInfo(), .system: TrackInfo()],
         markers: [Marker] = [],
@@ -90,6 +107,8 @@ public struct SessionManifest: Codable, Sendable, Equatable {
         self.state = state
         self.language = language
         self.resolvedLocaleIdentifier = resolvedLocaleIdentifier
+        self.kind = kind
+        self.detectedLanguage = detectedLanguage
         self.sampleRate = sampleRate
         self.tracks = tracks
         self.markers = markers
@@ -116,6 +135,10 @@ public struct SessionManifest: Codable, Sendable, Equatable {
         language = try container.decodeIfPresent(SessionLanguage.self, forKey: .language) ?? .auto
         resolvedLocaleIdentifier = try container.decodeIfPresent(
             String.self, forKey: .resolvedLocaleIdentifier
+        )
+        kind = try container.decodeIfPresent(SessionKindInfo.self, forKey: .kind)
+        detectedLanguage = try container.decodeIfPresent(
+            SessionLanguage.self, forKey: .detectedLanguage
         )
         sampleRate = try container.decodeIfPresent(Double.self, forKey: .sampleRate) ?? 16000
         tracks = try container.decodeIfPresent([AudioTrack: TrackInfo].self, forKey: .tracks) ?? [:]

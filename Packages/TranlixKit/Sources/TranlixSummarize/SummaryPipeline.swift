@@ -59,15 +59,9 @@ public actor SummaryPipeline {
         userConfirmedSharing: Bool = false,
         now: Date = Date()
     ) async throws -> GeneratedNote {
-        let alreadyShared = await handle.manifest.transcriptSharedAt != nil
-        guard alreadyShared || userConfirmedSharing else {
-            throw SummaryPipelineError.needsConfirmation
-        }
-        if !alreadyShared {
-            // Recorded before the request, not after: if the send fails halfway the transcript
-            // has still left the machine, and the manifest should say so.
-            try await handle.recordTranscriptShared(at: now)
-        }
+        try await Self.recordSharing(
+            session: handle, userConfirmed: userConfirmedSharing, now: now
+        )
 
         // Last chance before the transcript leaves the machine. `recordTranscriptShared` above
         // has already run, deliberately — over-recording that a send was about to happen is
@@ -85,6 +79,27 @@ public actor SummaryPipeline {
             markdown: document, fileName: Self.fileName(title: title, at: now)
         )
         return GeneratedNote(url: url, title: title, markdown: document, generatedAt: now)
+    }
+
+    /// Records that the transcript is about to leave the machine, and refuses if it may not.
+    ///
+    /// Before the send rather than after: if a call fails halfway the transcript has still
+    /// left, and the manifest should say so. Over-recording is the safe direction.
+    ///
+    /// Idempotent and separate from `generate` because summarising is no longer the only step
+    /// that sends — working out what kind of session this is sends an excerpt too, and it runs
+    /// first. One rule, one implementation, both call sites.
+    public static func recordSharing(
+        session handle: SessionHandle,
+        userConfirmed: Bool,
+        now: Date
+    ) async throws {
+        let alreadyShared = await handle.manifest.transcriptSharedAt != nil
+        guard alreadyShared || userConfirmed else {
+            throw SummaryPipelineError.needsConfirmation
+        }
+        guard !alreadyShared else { return }
+        try await handle.recordTranscriptShared(at: now)
     }
 
     // MARK: - Files

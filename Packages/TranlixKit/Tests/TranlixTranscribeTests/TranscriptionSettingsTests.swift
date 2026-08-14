@@ -25,6 +25,22 @@ struct TranscriptionSettingsTests {
         #expect(settings.language(for: .auto) == .automatic)
     }
 
+    @Test("auto falls back to a fixed language on the engine that cannot detect one")
+    func autoFallsBackOnApple() {
+        // Apple's transcriber is built around a chosen locale, and `ChainPlanner` turns an
+        // engine that cannot run the requested language into a refusal of the whole chain.
+        // Left alone, picking that engine would make every recording refuse to process.
+        let settings = TranscriptionSettings(
+            engineID: .apple, spanishLocaleIdentifier: "es-MX"
+        )
+        #expect(settings.language(for: .auto) == .fixed("es-MX"))
+    }
+
+    @Test("auto stays automatic on the engine that can work it out")
+    func autoStaysAutomaticOnWhisper() {
+        #expect(TranscriptionSettings(engineID: .whisperKit).language(for: .auto) == .automatic)
+    }
+
     /// Worth the download it costs on first use. Whisper detects the language, has no notion of
     /// regional variants so it never has to approximate Rioplatense the way Apple's `es-CL`
     /// does, and it is the only engine the VAD chunking applies to.
