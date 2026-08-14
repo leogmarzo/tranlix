@@ -75,6 +75,24 @@ enum CaptureTestTimeout: Error {
 /// Polls instead of sleeping a fixed interval. The writer drains on its own timer, and a
 /// fixed sleep that is comfortable when one test runs alone becomes a flake when the whole
 /// suite runs in parallel on a busy machine.
+/// Waits until a track's meter has actually read something.
+///
+/// Frames landing on disk and the meter being published are two different events, so waiting
+/// on `elapsed()` and then asserting on `levels` is a race — it passed most of the time and
+/// failed about once in seven full runs, which is the worst kind of test.
+func waitForLevel(
+    on coordinator: RecordingCoordinator,
+    track: AudioTrack,
+    timeout: TimeInterval = 5
+) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    while Date() < deadline {
+        if await (coordinator.levels[track] ?? 0) > 0 { return }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    throw CaptureTestTimeout.waitingForAudio(expected: 0, reached: 0)
+}
+
 func waitForRecorded(
     _ seconds: TimeInterval,
     on coordinator: RecordingCoordinator,

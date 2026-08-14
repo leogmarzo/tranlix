@@ -337,7 +337,10 @@ struct RecordingPauseTests {
 
             sources.emitBoth(seconds: 1, hostTime: 100)
             try await waitForRecorded(1, on: recorder)
-            #expect((await recorder.levels[.mic] ?? 0) > 0)
+            // Waits for the meter itself, not for the frames: they are published separately,
+            // and asserting on one after waiting for the other is the race this test used to
+            // lose about once in seven runs.
+            try await waitForLevel(on: recorder, track: .mic)
 
             try await recorder.pause(now: epoch)
             #expect((await recorder.levels[.mic] ?? 1) == 0)
