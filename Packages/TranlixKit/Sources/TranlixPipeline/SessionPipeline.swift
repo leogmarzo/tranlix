@@ -130,6 +130,24 @@ public actor SessionPipeline {
         continuation.yield(.finished)
     }
 
+    /// Folds what the user typed during the session into the instruction.
+    ///
+    /// Someone who wrote "ojo — esto entra al parcial" while a class was running has told the
+    /// summariser what matters far more precisely than any template can. Kept in the
+    /// instruction rather than mixed into the transcript so it reads as direction rather than
+    /// as something a person in the room said.
+    private func instruction(_ base: String, with userNotes: String?) -> String {
+        guard let userNotes, !userNotes.isEmpty else { return base }
+        return """
+        \(base)
+
+        La persona que grabó esta sesión tomó estos apuntes mientras pasaba. Son lo que a ella \
+        le importó; tenelos en cuenta y no los contradigas.
+
+        \(userNotes)
+        """
+    }
+
     private func writeNotes(_ handle: SessionHandle, _ notes: NotesRequest) async throws {
         guard let transcript = try await handle.readTranscript() else {
             throw DiarizationError.transcriptMissing
@@ -142,7 +160,7 @@ public actor SessionPipeline {
         try await SummaryPipeline(provider: provider).generate(
             session: handle,
             transcript: rendered,
-            instruction: notes.instruction,
+            instruction: instruction(notes.instruction, with: await handle.readUserNotes()),
             title: notes.title,
             model: notes.model,
             // The allowance is the permission. It cannot be built without one, which is why

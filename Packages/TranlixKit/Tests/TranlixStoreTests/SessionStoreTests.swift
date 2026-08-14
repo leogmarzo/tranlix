@@ -216,3 +216,26 @@ struct SessionStoreTests {
         }
     }
 }
+
+@Suite("SessionStore deletion")
+struct SessionStoreDeletionTests {
+    private let epoch = Date(timeIntervalSince1970: 1_754_152_200)
+
+    @Test("deleting a session moves it to the Trash rather than destroying it")
+    func deleteIsRecoverable() async throws {
+        try await withTemporaryRoot { root in
+            let store = SessionStore(root: root)
+            let handle = try store.createSession(title: "Clase", language: .spanish, now: epoch)
+            let summary = try #require(store.summary(ofFolder: await handle.layout.root))
+
+            let trashed = try store.delete(summary)
+
+            // Gone from the library, still on the machine. Everything else here is built so a
+            // recording cannot be lost by accident; deletion should not be the exception.
+            #expect(!FileManager.default.exists(summary.layout.root))
+            let recovered = try #require(trashed)
+            #expect(FileManager.default.exists(recovered))
+            #expect(recovered.lastPathComponent.contains("Clase"))
+        }
+    }
+}

@@ -281,7 +281,20 @@ public struct SessionStore: Sendable {
 
     // MARK: - Deleting
 
-    public func delete(_ summary: SessionSummary) throws {
-        try FileManager.default.removeItem(at: summary.layout.root)
+    /// Moves a session to the Trash.
+    ///
+    /// Not `removeItem`. Everything else here is built so that a recording cannot be lost by
+    /// accident — the manifest is written before any audio, the chunks outlive a verified
+    /// archive, a failed stage keeps its inputs — and deletion has no business being the one
+    /// irreversible act in the app. A class is an hour of somebody's life.
+    ///
+    /// - Returns: where it landed, so the caller can offer to put it back.
+    @discardableResult
+    public func delete(_ summary: SessionSummary) throws -> URL? {
+        var trashed: NSURL?
+        try FileManager.default.trashItem(
+            at: summary.layout.root, resultingItemURL: &trashed
+        )
+        return trashed as URL?
     }
 }

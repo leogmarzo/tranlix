@@ -59,9 +59,24 @@ final class RecorderViewModel {
         let isSevere: Bool
     }
 
+    /// Notes typed while the session runs. Merged into the summary prompt afterwards.
+    var notes = "" {
+        didSet {
+            guard notes != oldValue else { return }
+            scheduleNotesSave()
+        }
+    }
+
+    /// Markers dropped so far, newest last, so the side panel can show what was flagged.
+    private(set) var markers: [(offset: TimeInterval, label: String)] = []
+
     private let environment: AppEnvironment
     private var pollTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
+
+    /// The running session, kept so notes and markers can be written to it as they are typed.
+    private var handle: SessionHandle?
+    private var notesSaveTask: Task<Void, Never>?
 
     /// Called after a session finishes, with the session that finished.
     ///
@@ -86,6 +101,8 @@ final class RecorderViewModel {
 
         notices.removeAll()
         markerCount = 0
+        markers.removeAll()
+        notes = ""
         elapsedSeconds = 0
         levels = [:]
         silentTracks = []
@@ -102,7 +119,7 @@ final class RecorderViewModel {
         observeEvents(of: coordinator)
 
         do {
-            try await coordinator.start(title: title, language: language, now: Date())
+            handle = try await coordinator.start(title: title, language: language, now: Date())
             isRecording = true
             isPaused = false
             startPolling(coordinator)
@@ -160,6 +177,13 @@ final class RecorderViewModel {
         pollTask?.cancel()
         pollTask = nil
 
+        // Flushed rather than left to the debounce: the last thing typed is often the most
+        // important, and the chain reads this file moments from now.
+        notesSaveTask?.cancel()
+        if let handle, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            try? await handle.writeUserNotes(notes)
+        }
+
         var finished: SessionHandle?
         do {
             finished = try await environment.coordinator.stop(now: Date())
@@ -173,17 +197,38 @@ final class RecorderViewModel {
         silentTracks = []
         eventTask?.cancel()
         eventTask = nil
+        handle = nil
         title = ""
         if let finished { onSessionFinished?(finished) }
     }
 
-    func addMarker() async {
+    /// Drops a marker, with a title when there is one.
+    ///
+    /// `Marker.label` has been in the model since the beginning and was always written nil, so
+    /// a marker was a bookmark with nothing on it — findable only by listening around it.
+    func addMarker(label: String = "") async {
         guard isCapturing else { return }
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        let offset = TimeInterval(elapsedSeconds)
         do {
-            try await environment.coordinator.addMarker(label: nil, now: Date())
+            try await environment.coordinator.addMarker(
+                label: trimmed.isEmpty ? nil : trimmed, now: Date()
+            )
             markerCount += 1
+            markers.append((offset: offset, label: trimmed.isEmpty ? "Marcador" : trimmed))
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Saves a beat after typing stops, rather than on every keystroke.
+    private func scheduleNotesSave() {
+        notesSaveTask?.cancel()
+        let text = notes
+        notesSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled, let handle = self?.handle else { return }
+            try? await handle.writeUserNotes(text)
         }
     }
 

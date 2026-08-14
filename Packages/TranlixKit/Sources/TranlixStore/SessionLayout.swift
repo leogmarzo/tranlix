@@ -34,6 +34,13 @@ public struct SessionLayout: Sendable, Equatable {
     /// Searchable text, derived from the transcript. Safe to delete; rebuilt on demand.
     public var indexURL: URL { root.appending(path: "index.json") }
 
+    /// What the user typed while the session was being recorded.
+    ///
+    /// Deliberately its own file. Not the manifest, which is rewritten whole on every marker
+    /// and every pause, and not `notas/`, which holds what the model wrote — these are the
+    /// person's own words and the only copy of them.
+    public var userNotesURL: URL { root.appending(path: "apuntes.md") }
+
     /// Speaker turns for the system track, kept beside the transcript rather than inside it.
     ///
     /// Separate because the two are produced by different models and are independently

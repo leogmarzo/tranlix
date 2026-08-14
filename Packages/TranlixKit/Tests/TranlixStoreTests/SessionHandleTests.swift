@@ -103,6 +103,31 @@ struct SessionHandleTests {
         }
     }
 
+    // MARK: - Notes taken during the session
+
+    @Test("what you typed during class survives, and replaces itself rather than piling up")
+    func userNotesRoundTrip() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try newSession(in: root)
+
+            try await handle.writeUserNotes("ojo — esto entra al parcial")
+            try await handle.writeUserNotes("ojo — esto entra al parcial\npedirle los slides")
+
+            #expect(await handle.readUserNotes() == "ojo — esto entra al parcial\npedirle los slides")
+            // Its own file: the manifest is rewritten whole on every marker and every pause,
+            // and `notas/` is where generated notes live.
+            #expect(FileManager.default.exists(await handle.layout.userNotesURL))
+        }
+    }
+
+    @Test("a session nobody typed into has no notes rather than an empty file")
+    func noUserNotesByDefault() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try newSession(in: root)
+            #expect(await handle.readUserNotes() == nil)
+        }
+    }
+
     // MARK: - Stages
 
     @Test("entering transcription records it and hands back what to put down again")

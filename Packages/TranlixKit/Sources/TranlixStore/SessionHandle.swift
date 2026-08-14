@@ -243,6 +243,27 @@ public actor SessionHandle {
         try update { $0.diarization = info }
     }
 
+    // MARK: - Notes taken during the session
+
+    /// Replaces what the user has typed for this session.
+    ///
+    /// Written through `AtomicFile` like everything else here: these are the only copy of
+    /// somebody's own words, and a half-written file is not an acceptable outcome of closing
+    /// a laptop.
+    public func writeUserNotes(_ markdown: String) throws {
+        try AtomicFile.write(Data(markdown.utf8), to: layout.userNotesURL)
+    }
+
+    /// Nil when nothing was typed, rather than an empty string: the difference matters to the
+    /// summariser, which should not be handed a heading with nothing under it.
+    public func readUserNotes() -> String? {
+        guard let data = try? Data(contentsOf: layout.userNotesURL),
+              let text = String(data: data, encoding: .utf8),
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        return text
+    }
+
     // MARK: - Search index
 
     /// Rebuilds the searchable text from the transcript on disk.

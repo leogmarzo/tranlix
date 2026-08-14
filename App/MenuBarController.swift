@@ -52,17 +52,24 @@ final class MenuBarController: NSObject {
         }
     }
 
+    /// The item is always there.
+    ///
+    /// It used to exist only while a session was running, which meant the one surface that
+    /// could start a recording appeared only once one had already been started. Getting to
+    /// "grabando" took finding the window, selecting the sidebar row and filling in a form;
+    /// now it is one click from wherever you are.
     private func sync() {
-        guard recorder.isRecording else {
-            if let item { NSStatusBar.system.removeStatusItem(item) }
-            self.item = nil
-            return
-        }
-
         let item = self.item ?? insert()
         self.item = item
 
         guard let button = item.button else { return }
+
+        guard recorder.isRecording else {
+            button.image = Self.idleGlyph
+            button.attributedTitle = NSAttributedString(string: "")
+            return
+        }
+
         button.image = recorder.isPaused ? Self.pauseGlyph : Self.recordingDot
         button.attributedTitle = Self.clock(recorder.elapsedSeconds)
     }
@@ -93,6 +100,16 @@ final class MenuBarController: NSObject {
         // system, and this one has to stay red.
         image.isTemplate = false
         image.accessibilityDescription = "Grabando"
+        return image
+    }()
+
+    /// Idle: a template symbol, so it takes the menu bar's own colour like every other item
+    /// and does not shout while nothing is happening.
+    private static let idleGlyph: NSImage = {
+        let image = NSImage(
+            systemSymbolName: "waveform", accessibilityDescription: "Tranlix"
+        ) ?? NSImage()
+        image.isTemplate = true
         return image
     }()
 
@@ -128,6 +145,14 @@ final class MenuBarController: NSObject {
         }
     }
 
+    /// Starts a session without the window having to be open, let alone in front.
+    @objc private func startRecording() {
+        Task {
+            await recorder.start()
+            goToRecording()
+        }
+    }
+
     @objc private func togglePause() {
         Task {
             if recorder.isPaused {
@@ -152,6 +177,13 @@ final class MenuBarController: NSObject {
 extension MenuBarController: NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+
+        guard recorder.isRecording else {
+            menu.addItem(command("Grabar", #selector(startRecording), enabled: !recorder.isBusy))
+            menu.addItem(.separator())
+            menu.addItem(command("Abrir Tranlix", #selector(goToRecording), enabled: true))
+            return
+        }
 
         menu.addItem(caption(recorder.title.isEmpty ? "Sesión sin título" : recorder.title))
         menu.addItem(caption(stateLine))

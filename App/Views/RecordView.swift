@@ -2,30 +2,28 @@ import AppKit
 import SwiftUI
 import TranlixModel
 
-/// The recording screen: pick a language, name the session, press record.
+/// The live session: what is being captured, and what you want to remember about it.
+///
+/// It used to be a form — name, language, two paragraphs of advice — that had to be filled in
+/// before recording could start. A class does not wait for that. The name is now editable
+/// here and afterwards, and the only thing between opening the app and capturing is one
+/// button.
 struct RecordView: View {
     @Bindable var model: RecorderViewModel
 
-    var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 28) {
-                    setup
-                    Divider()
-                    meters
-                    if !model.notices.isEmpty {
-                        notices
-                    }
-                }
-                .padding(32)
-                .frame(maxWidth: 620, alignment: .leading)
-                .frame(maxWidth: .infinity)
-            }
+    @FocusState private var markerFieldFocused: Bool
+    @State private var markerLabel = ""
+    @State private var showHeadphones = true
 
-            Divider()
-            controls
+    var body: some View {
+        HStack(spacing: 0) {
+            main
+            if model.isRecording {
+                Divider()
+                side
+            }
         }
-        .navigationTitle("Grabación")
+        .navigationTitle(model.isRecording ? "Grabando" : "Nueva grabación")
         .alert(
             "No se pudo grabar",
             isPresented: Binding(
@@ -39,50 +37,72 @@ struct RecordView: View {
         }
     }
 
-    // MARK: - Setup
+    // MARK: - Main column
 
-    private var setup: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Nombre de la sesión")
-                    .font(.callout.weight(.medium))
-                TextField("Clase de Estadística", text: $model.title)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(model.isRecording)
+    private var main: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    header
+                    if showHeadphones { headphonesBanner }
+                    meters
+                    if !model.notices.isEmpty { notices }
+                }
+                .padding(24)
+                .frame(maxWidth: 600, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Idioma")
-                    .font(.callout.weight(.medium))
-                Picker("Idioma", selection: $model.language) {
-                    ForEach(SessionLanguage.allCases, id: \.self) { language in
-                        Text(language.displayName).tag(language)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .disabled(model.isRecording)
+            Divider()
+            controls
+        }
+    }
 
-                Text(languageHint)
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            TextField(defaultTitle, text: $model.title)
+                .textFieldStyle(.plain)
+                .font(.title2.weight(.semibold))
+            Text("El nombre se puede poner ahora o después. Grabar no espera a nadie.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var defaultTitle: String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "es_AR")
+        formatter.dateFormat = "d MMM HH:mm"
+        return "Grabación \(formatter.string(from: Date()))"
+    }
+
+    /// A banner, not a caption at the bottom of the meters.
+    ///
+    /// It is the one mistake with no recovery: recording on speakers makes the microphone pick
+    /// up the class too, and every phrase comes out written twice. Nothing later can undo it.
+    private var headphonesBanner: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "headphones")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Poné auriculares")
+                    .font(.callout.weight(.medium))
+                Text("Con parlantes el micrófono capta también la clase y cada frase sale escrita dos veces. No hay forma de arreglarlo después.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
+            Spacer()
+            Button("Entendido") { showHeadphones = false }
+                .buttonStyle(.link)
+                .font(.caption)
         }
+        .padding(12)
+        .background(.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
     }
-
-    private var languageHint: String {
-        switch model.language {
-        case .spanish, .english:
-            "Se fija antes de empezar. Forzar el idioma da mejor resultado que detectarlo cuando la sesión mezcla idiomas."
-        case .auto:
-            "El motor detecta el idioma. Conviene solo si de verdad no sabés cuál va a ser."
-        }
-    }
-
-    // MARK: - Meters
 
     private var meters: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
                 Text("Pistas")
                     .font(.callout.weight(.medium))
@@ -92,11 +112,6 @@ struct RecordView: View {
                         .foregroundStyle(.orange)
                 }
                 Spacer()
-                Text(ElapsedTime.clock(model.elapsedSeconds))
-                    .font(.system(.title2, design: .monospaced))
-                    .fontWeight(.medium)
-                    .foregroundStyle(model.isCapturing ? .primary : .secondary)
-                    .contentTransition(.numericText())
             }
 
             LevelMeter(
@@ -119,17 +134,8 @@ struct RecordView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-
-            Label(
-                "Usá auriculares. Con parlantes el micrófono capta también la clase y el texto sale duplicado.",
-                systemImage: "headphones"
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
     }
-
-    // MARK: - Notices
 
     private var notices: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -153,17 +159,18 @@ struct RecordView: View {
     /// paused. A misplaced click costs a pause, never a class — which is the whole reason the
     /// rest of this app is built the way it is.
     private var controls: some View {
-        HStack(spacing: 16) {
-            Button {
-                Task { await model.addMarker() }
-            } label: {
-                Label(
-                    model.markerCount == 0 ? "Marcador" : "Marcador (\(model.markerCount))",
-                    systemImage: "bookmark"
-                )
+        HStack(spacing: 14) {
+            if model.isRecording {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(model.isPaused ? Color.orange : .red)
+                        .frame(width: 9, height: 9)
+                    Text(ElapsedTime.clock(model.elapsedSeconds))
+                        .font(.system(.title2, design: .monospaced))
+                        .fontWeight(.medium)
+                        .contentTransition(.numericText())
+                }
             }
-            .keyboardShortcut("m", modifiers: .command)
-            .disabled(!model.isCapturing)
 
             Spacer()
 
@@ -196,14 +203,14 @@ struct RecordView: View {
                 }
             } label: {
                 Label(primaryTitle, systemImage: primaryIcon)
-                    .frame(minWidth: 90)
+                    .frame(minWidth: 84)
             }
             .buttonStyle(.borderedProminent)
             .tint(model.isCapturing ? .red : .accentColor)
-            .keyboardShortcut("r", modifiers: .command)
+            .keyboardShortcut("r", modifiers: [.command, .shift])
             .disabled(model.isBusy)
         }
-        .padding(20)
+        .padding(16)
         .background(.bar)
     }
 
@@ -215,5 +222,91 @@ struct RecordView: View {
     private var primaryIcon: String {
         if model.isPaused { return "play.fill" }
         return model.isRecording ? "pause.fill" : "record.circle"
+    }
+
+    // MARK: - Side column
+
+    /// Where you write down what matters while it is happening.
+    ///
+    /// This is the part a recording cannot replace: the model can transcribe everything said
+    /// and still not know which sentence you needed.
+    private var side: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Tus notas")
+                .font(.caption2.weight(.semibold))
+                .textCase(.uppercase)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 14)
+                .padding(.top, 13)
+                .padding(.bottom, 8)
+
+            TextEditor(text: $model.notes)
+                .font(.body)
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 10)
+                .overlay(alignment: .topLeading) {
+                    if model.notes.isEmpty {
+                        Text("Lo que anotes acá se fusiona con el resumen al terminar.\n\nEjemplo: «ojo — esto entra al parcial», «pedirle los slides».")
+                            .font(.body)
+                            .foregroundStyle(.tertiary)
+                            .padding(.horizontal, 15)
+                            .padding(.top, 8)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+            if !model.markers.isEmpty { markerList }
+            markerField
+        }
+        .frame(width: 280)
+        .background(.quaternary.opacity(0.3))
+    }
+
+    private var markerList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(Array(model.markers.enumerated()), id: \.offset) { _, marker in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(ElapsedTime.clock(Int(marker.offset)))
+                            .font(.system(.caption2, design: .monospaced))
+                            .foregroundStyle(.orange)
+                        Text(marker.label)
+                            .font(.caption)
+                        Spacer()
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+        }
+        .frame(maxHeight: 160)
+        .background(.quaternary.opacity(0.25))
+    }
+
+    private var markerField: some View {
+        HStack(spacing: 7) {
+            TextField("Marcador con título", text: $markerLabel)
+                .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
+                .focused($markerFieldFocused)
+                .onSubmit(drop)
+            Button("Marcar", action: drop)
+                .controlSize(.small)
+        }
+        .padding(12)
+        .disabled(!model.isCapturing)
+        // ⌘M puts the cursor here rather than dropping a blank marker: a bookmark with a title
+        // is one you can find again from the transcript.
+        .background {
+            Button("") { markerFieldFocused = true }
+                .keyboardShortcut("m", modifiers: .command)
+                .opacity(0)
+        }
+    }
+
+    private func drop() {
+        let label = markerLabel
+        markerLabel = ""
+        Task { await model.addMarker(label: label) }
     }
 }

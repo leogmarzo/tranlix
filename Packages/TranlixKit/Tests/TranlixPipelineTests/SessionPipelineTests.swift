@@ -80,6 +80,26 @@ struct SessionPipelineTests {
         }
     }
 
+    @Test("what you flagged during class reaches the summariser")
+    func userNotesReachThePrompt() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            try await handle.writeUserNotes("ojo — la fórmula entra al parcial")
+
+            let provider = StubProvider()
+            let pipeline = SessionPipeline(
+                engine: StubEngine(), diarizer: StubDiarizer(turns: []), provider: provider
+            )
+
+            for try await _ in pipeline.run(session: handle, request: request()) {}
+
+            // Otherwise typing during a class would be a private diary the notes never see,
+            // and the whole point of jotting "esto entra" is that the summary knows it.
+            let sent = try #require(await provider.lastRequest)
+            #expect(sent.instruction.contains("la fórmula entra al parcial"))
+        }
+    }
+
     @Test("a failed transcription stops the chain before anything is sent")
     func transcriptionFailureStopsEverything() async throws {
         try await withTemporaryRoot { root in

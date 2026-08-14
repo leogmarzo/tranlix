@@ -13,6 +13,10 @@ struct RootView: View {
     @State private var library: LibraryViewModel
     @State private var showRecovery = false
 
+    /// The session waiting on a yes. An hour of a class is not something a stray click in a
+    /// context menu should be able to take away.
+    @State private var pendingDeletion: SessionSummary?
+
     init(environment: AppEnvironment, settings: SettingsStore, recorder: RecorderViewModel) {
         self.environment = environment
         self.settings = settings
@@ -59,6 +63,26 @@ struct RootView: View {
                 onDismiss: { showRecovery = false }
             )
         }
+        .confirmationDialog(
+            "¿Mover «\(pendingDeletion?.displayTitle ?? "")» a la Papelera?",
+            isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }
+            ),
+            presenting: pendingDeletion
+        ) { summary in
+            Button("Mover a la Papelera", role: .destructive) {
+                Task {
+                    await library.delete(summary)
+                    if navigation.selection == .session(summary.id) {
+                        navigation.selection = .record
+                    }
+                }
+            }
+            Button("Cancelar", role: .cancel) { pendingDeletion = nil }
+        } message: { _ in
+            Text("Se mueven el audio, el transcript y las notas. Podés recuperarlos desde la Papelera mientras no la vacíes.")
+        }
     }
 
     private func sidebar(selection: Binding<SidebarSelection?>) -> some View {
@@ -90,13 +114,8 @@ struct RootView: View {
                             )
                             .tag(SidebarSelection.session(summary.id))
                             .contextMenu {
-                                Button("Borrar", role: .destructive) {
-                                    Task {
-                                        await library.delete(summary)
-                                        if selection.wrappedValue == .session(summary.id) {
-                                            selection.wrappedValue = .record
-                                        }
-                                    }
+                                Button("Borrar…", role: .destructive) {
+                                    pendingDeletion = summary
                                 }
                             }
                         }

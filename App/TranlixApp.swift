@@ -34,8 +34,13 @@ struct TranlixApp: App {
             RootView(environment: environment, settings: settings, recorder: recorder)
                 .frame(minWidth: 900, minHeight: 620)
                 .task {
+                    // Installed here rather than relying on RootView's own task having run:
+                    // the order between two `.task` modifiers on the same view is not defined,
+                    // and the delegate reads the result on the next line.
+                    environment.installPipeline(settings: settings)
                     delegate.coordinator = environment.coordinator
                     delegate.recorder = recorder
+                    delegate.pipeline = environment.pipeline
                     // Captured here because there is a window now. The action stays valid
                     // later, when there may not be one.
                     menuBar.openMainWindow = { openWindow(id: Self.mainWindowID) }
@@ -60,16 +65,20 @@ struct TranlixApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor var coordinator: RecordingCoordinator?
     @MainActor var recorder: RecorderViewModel?
+    @MainActor var pipeline: PipelineCoordinator?
 
     /// Closing the window during a session must not end the session.
     ///
     /// The menu bar item exists precisely so a recording can outlive the window being put
     /// away, and quitting here would finalize a class the user only meant to get out of the
-    /// way. With no session open the ordinary rule stands, so the app never quietly becomes a
-    /// background agent.
+    /// way. The same now goes for the chain that runs after it. With neither in flight the
+    /// ordinary rule stands, so the app never quietly becomes a background agent.
     @MainActor
     func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
-        recorder?.isRecording != true
+        // Also while the chain is working. Transcribing an hour takes minutes, it starts by
+        // itself the moment a recording ends, and quitting halfway leaves the session in
+        // `.transcribing` — which the next launch reads as a crash and offers to recover.
+        recorder?.isRecording != true && pipeline?.isBusy != true
     }
 
     @MainActor
