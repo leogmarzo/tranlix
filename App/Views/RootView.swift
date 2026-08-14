@@ -130,7 +130,7 @@ struct RootView: View {
             RecordView(model: recorder)
         case let .session(id):
             if let summary = library.summary(withID: id) {
-                SessionDetailView(
+                SessionView(
                     summary: summary, environment: environment, settings: settings
                 )
                 .id(summary.id)

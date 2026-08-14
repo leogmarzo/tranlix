@@ -43,9 +43,14 @@ final class PipelineCoordinator {
 
     var isBusy: Bool { !runs.isEmpty }
 
-    /// Starts the chain for a session that has just finished recording.
-    func start(_ handle: SessionHandle, stages: Set<PipelineStage> = Set(PipelineStage.allCases)) {
-        Task { await begin(handle, stages: stages) }
+    /// Starts a run: the whole chain after a recording, or one stage from the session view.
+    func start(
+        _ handle: SessionHandle,
+        stages: Set<PipelineStage> = Set(PipelineStage.allCases),
+        force: Bool = false,
+        notesConfirmed: Bool = false
+    ) {
+        Task { await begin(handle, stages: stages, force: force, notesConfirmed: notesConfirmed) }
     }
 
     /// Cancels a run and waits for it to actually stop.
@@ -60,12 +65,19 @@ final class PipelineCoordinator {
 
     // MARK: - Running
 
-    private func begin(_ handle: SessionHandle, stages: Set<PipelineStage>) async {
+    private func begin(
+        _ handle: SessionHandle,
+        stages: Set<PipelineStage>,
+        force: Bool,
+        notesConfirmed: Bool
+    ) async {
         let manifest = await handle.manifest
         let sessionID = manifest.id
         guard runs[sessionID] == nil else { return }
 
-        let request = await makeRequest(for: manifest, stages: stages)
+        let request = await makeRequest(
+            for: manifest, stages: stages, force: force, notesConfirmed: notesConfirmed
+        )
         let pipeline = await SessionPipeline(
             engine: environment.engines.engine(settings.transcription.engineID),
             diarizer: environment.diarizer,
@@ -94,19 +106,22 @@ final class PipelineCoordinator {
 
     private func makeRequest(
         for manifest: SessionManifest,
-        stages: Set<PipelineStage>
+        stages: Set<PipelineStage>,
+        force: Bool,
+        notesConfirmed: Bool
     ) async -> PipelineRequest {
         PipelineRequest(
             language: settings.language(for: manifest.language),
             engineID: settings.transcription.engineID,
-            notes: notesRequest(for: manifest),
+            notes: notesRequest(for: manifest, confirmed: notesConfirmed),
+            force: force,
             stages: stages
         )
     }
 
     /// Nil whenever the notes stage must not run on its own — which is the entire rule, since
     /// nothing downstream checks anything.
-    private func notesRequest(for manifest: SessionManifest) -> NotesRequest? {
+    private func notesRequest(for manifest: SessionManifest, confirmed: Bool) -> NotesRequest? {
         guard APIKeyStore().hasKey else { return nil }
         let templates = TemplateStore().load()
         let template = templates.first { $0.id == settings.defaultTemplateID } ?? templates.first
@@ -116,7 +131,9 @@ final class PipelineCoordinator {
             instruction: template.prompt,
             title: template.name,
             model: settings.summaryModel.identifier,
-            allowance: NotesPolicy.allowance(for: manifest)
+            // Asking is the other way to earn permission: a session past the automatic limit
+            // is not forbidden, it just does not go on its own.
+            allowance: confirmed ? .confirmedByUser() : NotesPolicy.allowance(for: manifest)
         )
     }
 
