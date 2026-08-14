@@ -15,9 +15,16 @@ public actor StubEngine: TranscriptionEngine {
     public private(set) var transcribedChunks: [URL] = []
     public private(set) var prepareCount = 0
 
+    /// What each call was asked to transcribe in, in order. Detecting once and then pinning is
+    /// only observable from here: the transcript looks the same either way.
+    public private(set) var requestedLanguages: [TranscriptionLanguage] = []
+
     private var availability: EngineAvailability
     private var failAfter: Int?
     private var textForChunk: @Sendable (URL) -> String
+
+    /// What the engine claims to have worked out, when it is asked to detect.
+    private let detectedLanguage: String?
 
     /// Makes each chunk take long enough that a test can cancel partway through one.
     private let delayPerChunk: Duration?
@@ -27,12 +34,14 @@ public actor StubEngine: TranscriptionEngine {
         availability: EngineAvailability = .ready,
         failAfter: Int? = nil,
         delayPerChunk: Duration? = nil,
+        detectedLanguage: String? = nil,
         textForChunk: @escaping @Sendable (URL) -> String = { $0.deletingPathExtension().lastPathComponent }
     ) {
         self.id = id
         self.availability = availability
         self.failAfter = failAfter
         self.delayPerChunk = delayPerChunk
+        self.detectedLanguage = detectedLanguage
         self.textForChunk = textForChunk
     }
 
@@ -58,9 +67,10 @@ public actor StubEngine: TranscriptionEngine {
 
     public func transcribe(
         chunk url: URL,
-        language _: TranscriptionLanguage,
+        language: TranscriptionLanguage,
         track: AudioTrack
-    ) async throws -> [TranscriptSegment] {
+    ) async throws -> EngineTranscription {
+        requestedLanguages.append(language)
         if let delayPerChunk {
             // Deliberately not cancellation-aware: the point of the cancellation tests is that
             // the *pipeline* stops between chunks, not that the engine cooperates.
@@ -73,12 +83,16 @@ public actor StubEngine: TranscriptionEngine {
 
         // Two segments per chunk, at fixed chunk-relative times, so a test can check exactly
         // where they land on the session timeline.
-        return [
-            TranscriptSegment(
-                track: track, start: 0, end: 1, text: textForChunk(url),
-                words: [TranscriptWord(text: textForChunk(url), start: 0, end: 1)]
-            ),
-            TranscriptSegment(track: track, start: 2, end: 3, text: "segundo"),
-        ]
+        return EngineTranscription(
+            segments: [
+                TranscriptSegment(
+                    track: track, start: 0, end: 1, text: textForChunk(url),
+                    words: [TranscriptWord(text: textForChunk(url), start: 0, end: 1)]
+                ),
+                TranscriptSegment(track: track, start: 2, end: 3, text: "segundo"),
+            ],
+            // Like the real engines: a language is only reported when one was asked for.
+            detectedLanguage: language == .automatic ? detectedLanguage : nil
+        )
     }
 }

@@ -79,6 +79,26 @@ public enum TranscriptionError: Error, LocalizedError {
     }
 }
 
+/// What an engine produced for one chunk.
+///
+/// A struct rather than a bare `[TranscriptSegment]` so that an engine which worked the
+/// language out for itself can say so. Whisper knows — it is handed `detectLanguage: true`
+/// and reports what it found — and until this type existed the answer was discarded at the
+/// call site, leaving the app unable to name the language of the very sessions that had not
+/// been given one.
+public struct EngineTranscription: Sendable, Equatable {
+    public var segments: [TranscriptSegment]
+
+    /// The language the engine identified, as a bare code such as `es`. `nil` when the engine
+    /// was told which language to use, or cannot detect one at all.
+    public var detectedLanguage: String?
+
+    public init(segments: [TranscriptSegment], detectedLanguage: String? = nil) {
+        self.segments = segments
+        self.detectedLanguage = detectedLanguage
+    }
+}
+
 /// Turns one chunk of audio into timed segments.
 ///
 /// Two implementations sit behind this, and which one runs is a setting rather than a
@@ -111,5 +131,5 @@ public protocol TranscriptionEngine: Sendable {
         chunk url: URL,
         language: TranscriptionLanguage,
         track: AudioTrack
-    ) async throws -> [TranscriptSegment]
+    ) async throws -> EngineTranscription
 }

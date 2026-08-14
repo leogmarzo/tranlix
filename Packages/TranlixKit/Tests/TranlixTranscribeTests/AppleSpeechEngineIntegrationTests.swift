@@ -55,7 +55,9 @@ struct AppleSpeechEngineIntegrationTests {
         let url = try await sample()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let segments = try await engine.transcribe(chunk: url, language: language, track: .system)
+        let segments = try await engine.transcribe(
+            chunk: url, language: language, track: .system
+        ).segments
 
         #expect(!segments.isEmpty)
         let joined = segments.map(\.text).joined(separator: " ")
@@ -80,7 +82,9 @@ struct AppleSpeechEngineIntegrationTests {
         defer { try? FileManager.default.removeItem(at: url) }
         let duration = try AVAudioFile(forReading: url).duration
 
-        let segments = try await engine.transcribe(chunk: url, language: language, track: .mic)
+        let segments = try await engine.transcribe(
+            chunk: url, language: language, track: .mic
+        ).segments
         let first = try #require(segments.first)
 
         #expect(first.start >= 0)
@@ -100,7 +104,9 @@ struct AppleSpeechEngineIntegrationTests {
         let url = try await sample()
         defer { try? FileManager.default.removeItem(at: url) }
 
-        let segments = try await engine.transcribe(chunk: url, language: language, track: .system)
+        let segments = try await engine.transcribe(
+            chunk: url, language: language, track: .system
+        ).segments
         let words = segments.flatMap(\.words)
         print("WORDS[apple/es-CL]: " + words.prefix(12).map {
             "\($0.text)@\(String(format: "%.2f", $0.start))"
@@ -152,7 +158,7 @@ struct WhisperKitIntegrationTests {
 
         let segments = try await engine.transcribe(
             chunk: url, language: .fixed("es-CL"), track: .system
-        )
+        ).segments
         let text = segments.map(\.text).joined(separator: " ")
         print("TRANSCRIPT[whisperkit/es]: \(text)")
 
@@ -177,7 +183,7 @@ struct WhisperKitIntegrationTests {
 
         let words = try await engine.transcribe(
             chunk: url, language: .fixed("es-CL"), track: .mic
-        ).flatMap(\.words)
+        ).segments.flatMap(\.words)
 
         #expect(!words.isEmpty)
         #expect(zip(words, words.dropFirst()).allSatisfy { $0.start <= $1.start })

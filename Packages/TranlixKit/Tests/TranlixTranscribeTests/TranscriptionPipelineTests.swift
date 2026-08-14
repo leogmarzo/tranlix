@@ -470,4 +470,92 @@ struct TranscriptionPipelineTests {
             #expect(await engine.transcribeCallCount == 0)
         }
     }
+
+    // MARK: - Language detection
+
+    @Test("the language detected on the first chunk is used for the rest of them")
+    func detectionPinsTheRemainingChunks() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(detectedLanguage: "en")
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: .automatic, progress: { _ in }
+            )
+
+            // Detecting per chunk is what the design rejects: a class taught in Spanish that
+            // quotes English terminology would flap between languages mid-session.
+            #expect(
+                await engine.requestedLanguages
+                    == [.automatic, .fixed("en"), .fixed("en")]
+            )
+        }
+    }
+
+    @Test("what actually ran is recorded, not the nothing that was asked for")
+    func detectedLanguageReachesTheManifest() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(detectedLanguage: "en")
+
+            let transcript = try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: .automatic, progress: { _ in }
+            )
+
+            // `.automatic` has no identifier, so this field used to be left nil for exactly the
+            // sessions whose language nobody had written down anywhere.
+            #expect(await handle.manifest.resolvedLocaleIdentifier == "en")
+            #expect(transcript.localeIdentifier == "en")
+        }
+    }
+
+    @Test("a chosen language is never overridden by what the engine reports")
+    func chosenLanguageWins() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(detectedLanguage: "en")
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: .fixed("es-CL"), progress: { _ in }
+            )
+
+            #expect(await engine.requestedLanguages.allSatisfy { $0 == .fixed("es-CL") })
+            #expect(await handle.manifest.resolvedLocaleIdentifier == "es-CL")
+        }
+    }
+
+    @Test("a session that already worked out its language does not transcribe twice")
+    func detectionIsNotRepeatedAcrossRuns() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(detectedLanguage: "en")
+            let pipeline = TranscriptionPipeline(engine: engine)
+
+            try await pipeline.transcribe(
+                session: handle, language: .automatic, progress: { _ in }
+            )
+            try await pipeline.transcribe(
+                session: handle, language: .automatic, progress: { _ in }
+            )
+
+            // Without carrying the resolved language into the second run, every chunk stored
+            // under `en` would be compared against a nil identifier and redone from scratch.
+            #expect(await engine.transcribeCallCount == 3)
+        }
+    }
+
+    @Test("an engine that cannot work out the language leaves it unresolved")
+    func undetectedLanguageStaysAutomatic() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(detectedLanguage: nil)
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: .automatic, progress: { _ in }
+            )
+
+            #expect(await engine.requestedLanguages.allSatisfy { $0 == .automatic })
+            #expect(await handle.manifest.resolvedLocaleIdentifier == nil)
+        }
+    }
 }

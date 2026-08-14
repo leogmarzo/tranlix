@@ -102,7 +102,7 @@ public struct AppleSpeechEngine: TranscriptionEngine {
         chunk url: URL,
         language: TranscriptionLanguage,
         track: AudioTrack
-    ) async throws -> [TranscriptSegment] {
+    ) async throws -> EngineTranscription {
         guard case let .fixed(identifier) = language else {
             throw TranscriptionError.languageNotSupported("auto", engine: displayName)
         }
@@ -138,7 +138,9 @@ public struct AppleSpeechEngine: TranscriptionEngine {
         }
         withExtendedLifetime(analyzer) {}
 
-        return segments
+        // No detected language to report: this engine is built around a locale it was given,
+        // which is why `.automatic` is refused above rather than guessed at.
+        return EngineTranscription(segments: segments)
     }
 
     private func makeTranscriber(locale: Locale) -> SpeechTranscriber {

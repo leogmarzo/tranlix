@@ -197,7 +197,7 @@ public actor WhisperKitEngine: TranscriptionEngine {
         chunk url: URL,
         language: TranscriptionLanguage,
         track: AudioTrack
-    ) async throws -> [TranscriptSegment] {
+    ) async throws -> EngineTranscription {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw TranscriptionError.audioUnreadable(url)
         }
@@ -212,7 +212,7 @@ public actor WhisperKitEngine: TranscriptionEngine {
             throw TranscriptionError.engineFailed(error.localizedDescription)
         }
 
-        return results.flatMap(\.segments).compactMap { segment in
+        let segments = results.flatMap(\.segments).compactMap { segment -> TranscriptSegment? in
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return nil }
             return TranscriptSegment(
@@ -231,6 +231,14 @@ public actor WhisperKitEngine: TranscriptionEngine {
                 }
             )
         }
+
+        // Only reported when it was actually worked out. Asked for a fixed language, Whisper
+        // echoes back what it was told, and passing that on would dress an instruction up as
+        // a discovery.
+        return EngineTranscription(
+            segments: segments,
+            detectedLanguage: language == .automatic ? results.first?.language : nil
+        )
     }
 }
 

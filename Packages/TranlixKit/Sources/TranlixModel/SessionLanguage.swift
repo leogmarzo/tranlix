@@ -14,6 +14,26 @@ public enum SessionLanguage: String, Codable, Sendable, CaseIterable, Hashable {
 }
 
 public extension SessionLanguage {
+    /// The language an engine or a detector reported, as one of the two the app supports.
+    ///
+    /// Accepts whatever shape the source uses — Whisper reports a bare `es`, a locale carries
+    /// `es-CL`, `Locale` itself prefers `en_US` — because the region never changes the answer.
+    ///
+    /// `nil` for anything else rather than a fallback: producing Spanish notes for a French
+    /// recording would read as the model having failed rather than as a language the app does
+    /// not support.
+    init?(detectedCode: String) {
+        let code = detectedCode
+            .split(whereSeparator: { $0 == "-" || $0 == "_" })
+            .first?
+            .lowercased()
+        switch code {
+        case "es": self = .spanish
+        case "en": self = .english
+        default: return nil
+        }
+    }
+
     var displayName: String {
         switch self {
         case .spanish: "Español"

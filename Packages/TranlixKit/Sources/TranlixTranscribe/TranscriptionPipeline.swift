@@ -102,11 +102,23 @@ public actor TranscriptionPipeline {
         language: TranscriptionLanguage,
         progress: @escaping @Sendable (TranscriptionPhase) -> Void
     ) async throws -> Transcript {
-        switch await engine.availability(for: language) {
+        // The language this run actually uses. It starts as whatever was asked for and, when
+        // that was `.automatic`, narrows to a fixed one as soon as anything knows better.
+        //
+        // A language resolved on an earlier run stands in from the start. That keeps the
+        // cached chunks — filed under the resolved language, not under the nothing that was
+        // requested — reusable, and it lets an engine that cannot detect re-run a session
+        // whose language another engine already worked out.
+        var effective = language
+        if language == .automatic, let resolved = await handle.manifest.resolvedLocaleIdentifier {
+            effective = .fixed(resolved)
+        }
+
+        switch await engine.availability(for: effective) {
         case .ready:
             break
         case .needsDownload:
-            try await engine.prepare(for: language) { progress(.preparingEngine(fraction: $0)) }
+            try await engine.prepare(for: effective) { progress(.preparingEngine(fraction: $0)) }
         case let .unsupported(reason):
             throw TranscriptionError.languageNotSupported(reason, engine: engine.displayName)
         }
@@ -146,21 +158,31 @@ public actor TranscriptionPipeline {
             let chunkSegments: [TranscriptSegment]
             if let cached, cached.matches(
                 engineID: engine.id.rawValue,
-                localeIdentifier: language.identifier,
+                localeIdentifier: effective.identifier,
                 chunkFingerprint: fingerprint
             ) {
                 chunkSegments = cached.segments
                 reused += 1
             } else {
-                chunkSegments = try await engine.transcribe(
-                    chunk: item.url, language: language, track: item.track
+                let result = try await engine.transcribe(
+                    chunk: item.url, language: effective, track: item.track
                 )
+                chunkSegments = result.segments
+
+                // Narrowed before the result is filed, so this chunk is stored under the
+                // language it turned out to be rather than under the request that had none.
+                // Otherwise the next run would resolve the language, miss on every cached
+                // chunk, and transcribe the whole session again.
+                if effective == .automatic, let detected = result.detectedLanguage {
+                    effective = .fixed(detected)
+                }
+
                 // Persisted before moving on, which is the whole basis of resuming.
                 try await handle.writeChunkTranscript(ChunkTranscript(
                     chunkIndex: item.chunk.index,
                     track: item.track,
                     engineID: engine.id.rawValue,
-                    localeIdentifier: language.identifier,
+                    localeIdentifier: effective.identifier,
                     chunkFingerprint: fingerprint,
                     generatedAt: Date(),
                     segments: chunkSegments
@@ -190,14 +212,14 @@ public actor TranscriptionPipeline {
 
         let transcript = Transcript(
             engineID: engine.id.rawValue,
-            localeIdentifier: language.identifier,
+            localeIdentifier: effective.identifier,
             generatedAt: Date(),
             segments: segments
         )
         try await handle.writeTranscript(transcript)
 
         let engineID = engine.id.rawValue
-        let localeIdentifier = language.identifier
+        let localeIdentifier = effective.identifier
         try await handle.update { manifest in
             manifest.state = .transcribed
             manifest.transcriptionEngine = engineID
