@@ -16,7 +16,7 @@ struct LibraryRow: View {
                 Text(summary.displayTitle)
                     .lineLimit(1)
                 HStack(spacing: 5) {
-                    Text(summary.createdAt, format: .dateTime.hour().minute())
+                    Text(whenText)
                     if summary.duration > 0 {
                         Text("·")
                         Text(durationText)
@@ -55,6 +55,23 @@ struct LibraryRow: View {
                 .frame(width: 6, height: 6)
                 .padding(.top, 5)
         }
+    }
+
+    /// The date, as much of it as the group heading does not already give away.
+    ///
+    /// Under "Hoy" the time is the whole answer. Under a month heading it is not: "9:40 a. m."
+    /// with no day is a session you cannot place at all, which is what the row was showing.
+    private var whenText: String {
+        let calendar = Calendar.current
+        if calendar.isDateInToday(summary.createdAt) || calendar.isDateInYesterday(summary.createdAt) {
+            return summary.createdAt.formatted(.dateTime.hour().minute())
+        }
+        if let weekAgo = calendar.date(byAdding: .day, value: -7, to: Date()),
+           summary.createdAt > weekAgo {
+            // Within the week the weekday places it faster than the number does.
+            return summary.createdAt.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+        }
+        return summary.createdAt.formatted(.dateTime.day().month(.abbreviated).hour().minute())
     }
 
     private var durationText: String {

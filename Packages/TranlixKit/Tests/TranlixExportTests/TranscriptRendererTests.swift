@@ -200,7 +200,6 @@ struct TranscriptRendererTests {
         )
 
         #expect(markdown.contains("Pausa"))
-        #expect(!markdown.contains("00:05"))
     }
 
     @Test("a pause still open renders without inventing a duration")
@@ -225,15 +224,19 @@ struct TranscriptRendererTests {
         #expect(markdown.contains("01:05"))
     }
 
-    @Test("the prompt form drops what only costs tokens")
+    @Test("the prompt form drops the header but keeps what the note will need")
     func promptFormIsForTheModel() {
         let sut = transcript([segment("hola", speaker: "system-1", from: 65, to: 70)])
         let markdown = TranscriptRenderer.markdown(
             transcript: sut, manifest: manifest(), options: .prompt
         )
 
+        // The header is pure cost: the model is told what this is by the instruction.
         #expect(!markdown.contains("# Clase"))
-        #expect(!markdown.contains("01:05"))
+        // Timecodes used to be dropped for the same reason. They earn their tokens now: a note
+        // that cites when something was said becomes a note you can jump from, and one short
+        // code per paragraph is a cheap price for that.
+        #expect(markdown.contains("01:05"))
         // What must survive is who said what: that is the whole point of diarizing.
         #expect(markdown.contains("Persona 1:"))
     }

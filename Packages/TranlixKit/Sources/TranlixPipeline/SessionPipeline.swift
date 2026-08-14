@@ -137,16 +137,28 @@ public actor SessionPipeline {
     /// instruction rather than mixed into the transcript so it reads as direction rather than
     /// as something a person in the room said.
     private func instruction(_ base: String, with userNotes: String?) -> String {
-        guard let userNotes, !userNotes.isEmpty else { return base }
-        return """
-        \(base)
+        var parts = [base, Self.citationRule]
+        if let userNotes, !userNotes.isEmpty {
+            parts.append("""
+            La persona que grabó esta sesión tomó estos apuntes mientras pasaba. Son lo que a \
+            ella le importó; tenelos en cuenta y no los contradigas.
 
-        La persona que grabó esta sesión tomó estos apuntes mientras pasaba. Son lo que a ella \
-        le importó; tenelos en cuenta y no los contradigas.
-
-        \(userNotes)
-        """
+            \(userNotes)
+            """)
+        }
+        return parts.joined(separator: "\n\n")
     }
+
+    /// Added to every template, custom ones included.
+    ///
+    /// It belongs here rather than in the templates because it is a contract between the
+    /// renderer, which now emits timecodes, and the note view, which turns them into places
+    /// you can jump to. A template that forgot to ask would quietly lose that.
+    private static let citationRule = """
+    Cuando menciones algo puntual, citá el momento en que se dijo entre corchetes, con el \
+    formato [MM:SS] o [H:MM:SS], usando los tiempos que aparecen en la transcripción. No \
+    inventes tiempos: si no estás seguro, no cites.
+    """
 
     private func writeNotes(_ handle: SessionHandle, _ notes: NotesRequest) async throws {
         guard let transcript = try await handle.readTranscript() else {

@@ -47,8 +47,13 @@ public enum TranscriptRenderer {
 
         /// For the summariser: no timecodes and no header, since neither helps it and both
         /// cost tokens on every line.
+        /// What the summariser reads.
+        ///
+        /// Timecodes are included, and they are not decoration: a note that can say *where* a
+        /// thing was said turns into something you can jump from. Costs one short code per
+        /// paragraph — blocks are already merged, so it is far from one per segment.
         public static let prompt = Options(
-            includeTimecodes: false, includeHeader: false, includeMarkers: true
+            includeTimecodes: true, includeHeader: false, includeMarkers: true
         )
     }
 

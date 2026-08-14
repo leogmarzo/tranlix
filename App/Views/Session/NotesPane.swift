@@ -1,4 +1,5 @@
 import SwiftUI
+import TranlixExport
 
 /// The notes, read here.
 ///
@@ -20,6 +21,15 @@ struct NotesPane: View {
                 empty
             }
         }
+        // Intercepted rather than handed to the system: these links point at a moment in this
+        // session, not at anywhere on the internet.
+        .environment(\.openURL, OpenURLAction { url in
+            guard url.scheme == Self.seekScheme,
+                  let seconds = NoteTimecodes.seconds(fromLink: url)
+            else { return .systemAction }
+            model.seek(to: seconds)
+            return .handled
+        })
     }
 
     private func header(_ note: SessionViewModel.SavedNote) -> some View {
@@ -36,17 +46,22 @@ struct NotesPane: View {
         }
     }
 
-    /// Markdown, rendered rather than shown as source.
+    /// Markdown, rendered rather than shown as source, with the cited moments made clickable.
     ///
     /// `AttributedString`'s markdown parser handles inline formatting but not headings or
     /// lists, so those are left as written: better a heading that reads as `## Temas` than one
-    /// silently swallowed.
+    /// silently swallowed. Timecodes are rewritten as links first, which is what connects the
+    /// note to the audio — a note that says "[01:08]" and cannot take you there is only half
+    /// of the point.
     private func rendered(_ markdown: String) -> AttributedString {
-        (try? AttributedString(
-            markdown: markdown,
+        let linked = NoteTimecodes.linkingTimecodes(in: markdown, scheme: Self.seekScheme)
+        return (try? AttributedString(
+            markdown: linked,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         )) ?? AttributedString(markdown)
     }
+
+    static let seekScheme = "tranlix-seek"
 
     private var earlier: some View {
         VStack(alignment: .leading, spacing: 6) {

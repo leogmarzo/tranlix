@@ -60,6 +60,17 @@ struct NotesSettingsPane: View {
             }
 
             Section("Plantillas") {
+                // Which one the automatic chain uses. Without this the preference existed and
+                // was unreachable: every session got whichever template happened to be first.
+                Picker("Al terminar de grabar", selection: $settings.defaultTemplateID) {
+                    ForEach(templates) { template in
+                        Text(template.name).tag(Optional(template.id))
+                    }
+                }
+                Text("Las notas se generan solas al terminar, salvo que la grabación pase de cuatro horas — ahí hay que pedirlas a mano.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 ForEach(templates) { template in
                     HStack {
                         Text(template.name)
@@ -106,6 +117,13 @@ struct NotesSettingsPane: View {
     private func reload() {
         templates = store.load()
         storedKeyHint = ((try? keys.read()) ?? nil).map(Self.hint)
+
+        // The picker needs a selection that exists, and the chain falls back to the first
+        // template anyway — so show which one that actually is rather than an empty control.
+        if settings.defaultTemplateID == nil
+            || !templates.contains(where: { $0.id == settings.defaultTemplateID }) {
+            settings.defaultTemplateID = templates.first?.id
+        }
     }
 
     /// Shows enough of the key to tell two apart, and not enough to use one.
