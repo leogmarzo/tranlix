@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
-import TranlixModel
-import TranlixSummarize
+import TranslixModel
+import TranslixSummarize
 
 /// The API key, the model, and the prompt templates.
 struct NotesSettingsPane: View {
@@ -55,7 +55,7 @@ struct NotesSettingsPane: View {
                     }
                 }
 
-                Text("La key se guarda en el llavero del sistema, nunca en las preferencias ni en el binario. Es lo único que Tranlix manda a internet, y solo cuando confirmás el envío de una sesión.")
+                Text("La key se guarda en el llavero del sistema, nunca en las preferencias ni en el binario. Es lo único que Translix manda a internet, y solo cuando confirmás el envío de una sesión.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -70,7 +70,7 @@ struct NotesSettingsPane: View {
                         }
                     }
                 }
-                Text("Tranlix se fija solo si la grabación fue una clase, una reunión u otra cosa, y usa la plantilla que corresponda. Si se equivoca, lo corregís en el panel de notas de esa sesión.")
+                Text("Translix se fija solo si la grabación fue una clase, una reunión u otra cosa, y usa la plantilla que corresponda. Si se equivoca, lo corregís en el panel de notas de esa sesión.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -103,7 +103,7 @@ struct NotesSettingsPane: View {
                     Spacer()
                     Button("Nueva plantilla", action: addTemplate)
                 }
-                Text("Se guardan en Application Support/Tranlix/templates.json, editables también desde afuera de la app.")
+                Text("Se guardan en Application Support/Translix/templates.json, editables también desde afuera de la app.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

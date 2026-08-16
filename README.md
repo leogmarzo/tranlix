@@ -1,4 +1,4 @@
-# Tranlix
+# Translix
 
 macOS app that records online classes and meetings, transcribes them locally with speakers
 separated, and produces notes through an LLM.
@@ -17,10 +17,10 @@ always derivable and re-runnable, so no recording is ever lost because a later s
 ```bash
 scripts/run.sh      # generate the project, build, and launch
 scripts/build.sh    # generate and build only
-scripts/test.sh     # run the TranlixKit unit tests
+scripts/test.sh     # run the TranslixKit unit tests
 ```
 
-`Tranlix.xcodeproj` is generated from `project.yml` and is not committed. Run
+`Translix.xcodeproj` is generated from `project.yml` and is not committed. Run
 `xcodegen generate` after changing the project layout, or just use the scripts above.
 
 ### First build
@@ -41,7 +41,9 @@ ScreenCaptureKit, which is what Apple recommends when only audio is needed.
 
 The bundle id `com.leomarzo.tranlix` and the signing identity are deliberately fixed. TCC
 keys permission grants to that pair, so changing either makes macOS revoke the granted
-permissions on the next build.
+permissions on the next build. That is also why the bundle id still spells the app's former
+name: it survived the rename to Translix untouched, along with the keychain service holding
+the Anthropic key and the notarization profile used by `scripts/release.sh`.
 
 ## Layout
 
@@ -49,14 +51,14 @@ permissions on the next build.
 project.yml              XcodeGen spec — the single source of truth for the app target
 App/                     SwiftUI shell: views, view models, Info.plist, entitlements
 App/AppIcon.icon/        Icon Composer bundle: icon.json plus the SVG layers it composes
-Packages/TranlixKit/     all logic, as a local Swift package
-  TranlixModel           Codable types; the on-disk contract. A leaf with no dependencies
-  TranlixStore           session folders, atomic manifest I/O, library scan, recovery
-  TranlixCapture         Core Audio tap + AVAudioEngine mic, chunk writing, coordination
-  TranlixTranscribe      TranscriptionEngine protocol, Apple and WhisperKit engines
-  TranlixDiarize         speaker turns and merge into a single timeline
-  TranlixSummarize       Anthropic client, prompt templates, Keychain
-  TranlixExport          Markdown rendering
+Packages/TranslixKit/     all logic, as a local Swift package
+  TranslixModel           Codable types; the on-disk contract. A leaf with no dependencies
+  TranslixStore           session folders, atomic manifest I/O, library scan, recovery
+  TranslixCapture         Core Audio tap + AVAudioEngine mic, chunk writing, coordination
+  TranslixTranscribe      TranscriptionEngine protocol, Apple and WhisperKit engines
+  TranslixDiarize         speaker turns and merge into a single timeline
+  TranslixSummarize       Anthropic client, prompt templates, Keychain
+  TranslixExport          Markdown rendering
 scripts/                 build, test, run
 ```
 

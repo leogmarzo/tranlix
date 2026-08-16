@@ -1,6 +1,6 @@
 import SwiftUI
-import TranlixExport
-import TranlixModel
+import TranslixExport
+import TranslixModel
 
 /// The notes, read here.
 ///
@@ -91,7 +91,7 @@ struct NotesPane: View {
         )) ?? AttributedString(markdown)
     }
 
-    static let seekScheme = "tranlix-seek"
+    static let seekScheme = "translix-seek"
 
     private var earlier: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -118,8 +118,24 @@ struct NotesPane: View {
         }
     }
 
-    @ViewBuilder
+    /// The placeholder is the whole pane, so it centres in the whole pane.
+    ///
+    /// The column it sits in is built for reading notes: leading-aligned and, inside a scroll
+    /// view, resting against the top. That is right for prose and wrong for a placeholder, which
+    /// otherwise lands high and left of centre. Filling the column fixes the first — the column
+    /// is itself centred, so its centre is the pane's. Height has to come from the scroll view
+    /// instead, since the column only ever offers as much as the content asks for; the inset it
+    /// is measured against is the column's own padding, which would otherwise be added on top.
     private var empty: some View {
+        placeholder
+            .frame(maxWidth: .infinity)
+            .containerRelativeFrame(.vertical) { height, _ in
+                height - SessionView.columnPadding * 2
+            }
+    }
+
+    @ViewBuilder
+    private var placeholder: some View {
         if model.isProcessing {
             ContentUnavailableView(
                 "Escribiendo las notas…",
@@ -133,15 +149,13 @@ struct NotesPane: View {
                 description: Text("Primero hace falta una transcripción.")
             )
         } else {
-            VStack(alignment: .leading, spacing: 12) {
-                ContentUnavailableView {
-                    Label("Todavía no hay notas", systemImage: "sparkles")
-                } description: {
-                    Text("El transcript se envía a Anthropic para escribirlas. El audio no.")
-                } actions: {
-                    Button("Generar notas") { model.generateNotes() }
-                        .buttonStyle(.borderedProminent)
-                }
+            ContentUnavailableView {
+                Label("Todavía no hay notas", systemImage: "sparkles")
+            } description: {
+                Text("El transcript se envía a Anthropic para escribirlas. El audio no.")
+            } actions: {
+                Button("Generar notas") { model.generateNotes() }
+                    .buttonStyle(.borderedProminent)
             }
         }
     }

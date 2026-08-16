@@ -1,6 +1,6 @@
 import SwiftUI
-import TranlixModel
-import TranlixPlayback
+import TranslixModel
+import TranslixPlayback
 
 /// Play, scrub, and see where you are.
 ///

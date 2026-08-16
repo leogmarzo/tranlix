@@ -11,17 +11,17 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 "$ROOT/scripts/build.sh" "$CONFIG"
 
-APP="$ROOT/DerivedData/Build/Products/$CONFIG/Tranlix.app"
+APP="$ROOT/DerivedData/Build/Products/$CONFIG/Translix.app"
 
-if pgrep -x Tranlix >/dev/null 2>&1; then
-    echo "Stopping the running Tranlix instance..."
-    pkill -x Tranlix || true
+if pgrep -x Translix >/dev/null 2>&1; then
+    echo "Stopping the running Translix instance..."
+    pkill -x Translix || true
     # Give it a moment to release the audio devices before the new one grabs them.
     for _ in $(seq 1 20); do
-        pgrep -x Tranlix >/dev/null 2>&1 || break
+        pgrep -x Translix >/dev/null 2>&1 || break
         sleep 0.1
     done
-    pkill -9 -x Tranlix 2>/dev/null || true
+    pkill -9 -x Translix 2>/dev/null || true
 fi
 
 open "$APP"

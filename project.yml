@@ -1,4 +1,4 @@
-name: Tranlix
+name: Translix
 
 options:
   bundleIdPrefix: com.leomarzo
@@ -29,18 +29,18 @@ settings:
     SWIFT_STRICT_CONCURRENCY: complete
 
 packages:
-  TranlixKit:
-    path: Packages/TranlixKit
+  TranslixKit:
+    path: Packages/TranslixKit
 
 targets:
-  Tranlix:
+  Translix:
     type: application
     platform: macOS
     sources:
       - path: App
         excludes:
           - "Info.plist"
-          - "Tranlix.entitlements"
+          - "Translix.entitlements"
           - "AppIcon.icon"
       # The Icon Composer bundle, added as one file rather than scanned as a directory.
       # XcodeGen 2.46 has no entry for the `.icon` extension in its file-type table, so
@@ -49,7 +49,7 @@ targets:
       # reference that actool expects.
       - path: App/AppIcon.icon
         type: file
-    # Info.plist and Tranlix.entitlements are hand-written and committed, wired in via
+    # Info.plist and Translix.entitlements are hand-written and committed, wired in via
     # build settings below. Do NOT use XcodeGen's `info:`/`entitlements:` keys here —
     # those *generate* files at the given path and would silently overwrite the usage
     # descriptions and the audio-input entitlement on every `xcodegen generate`.
@@ -58,10 +58,16 @@ targets:
         # The bundle id is fixed forever: TCC grants are keyed to signing identity plus
         # bundle id, and a stable pair is what keeps the microphone and audio-capture
         # permissions alive across rebuilds.
+        #
+        # It keeps the app's original spelling on purpose. The app was renamed Tranlix ->
+        # Translix, and this is precisely the identifier that must not follow: changing it
+        # would make macOS treat this as a different app, revoke the microphone and
+        # audio-capture grants, and strand the preferences under com.leomarzo.tranlix.plist.
+        # A user-invisible identifier is a cheap price for not re-asking for permissions.
         PRODUCT_BUNDLE_IDENTIFIER: com.leomarzo.tranlix
-        PRODUCT_NAME: Tranlix
+        PRODUCT_NAME: Translix
         INFOPLIST_FILE: App/Info.plist
-        CODE_SIGN_ENTITLEMENTS: App/Tranlix.entitlements
+        CODE_SIGN_ENTITLEMENTS: App/Translix.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         # Manual signing on purpose. Automatic signing makes xcodebuild reach out to the
         # developer portal for a provisioning profile, which hangs indefinitely in a
@@ -77,14 +83,14 @@ targets:
         COMBINE_HIDPI_IMAGES: YES
         ENABLE_PREVIEWS: YES
     dependencies:
-      - package: TranlixKit
-        product: TranlixKit
+      - package: TranslixKit
+        product: TranslixKit
 
 schemes:
-  Tranlix:
+  Translix:
     build:
       targets:
-        Tranlix: all
+        Translix: all
     run:
       config: Debug
     test:

@@ -1,5 +1,5 @@
 import Foundation
-import TranlixStore
+import TranslixStore
 
 /// Sessions bucketed by how recently they happened.
 ///

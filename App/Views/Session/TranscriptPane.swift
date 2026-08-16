@@ -1,5 +1,5 @@
 import SwiftUI
-import TranlixModel
+import TranslixModel
 
 /// The transcript, as something you listen along to.
 ///

@@ -1,7 +1,7 @@
 import Foundation
 import Observation
-import TranlixModel
-import TranlixStore
+import TranslixModel
+import TranslixStore
 
 /// The session list, rebuilt by scanning the recordings folder.
 ///
@@ -31,6 +31,9 @@ final class LibraryViewModel {
     private let environment: AppEnvironment
     private var searchTask: Task<Void, Never>?
 
+    /// Sessions renamed while something held their folder open, waiting for it to catch up.
+    private var pendingFolderSync: Set<UUID> = []
+
     init(environment: AppEnvironment) {
         self.environment = environment
     }
@@ -54,9 +57,12 @@ final class LibraryViewModel {
         let store = environment.store
         let query = query
         do {
-            let all = try await Task.detached(priority: .userInitiated) {
+            let scanned = try await Task.detached(priority: .userInitiated) {
                 try store.listSummaries()
             }.value
+
+            // Before the search, so a folder that just moved is searched where it landed.
+            let all = syncPendingFolders(in: scanned)
 
             sessions = query.isEmpty
                 ? all
@@ -79,6 +85,69 @@ final class LibraryViewModel {
             guard !Task.isCancelled, let self else { return }
             await refresh()
         }
+    }
+
+    // MARK: - Renaming
+
+    /// Renames a session, and moves its folder when nothing is holding it open.
+    ///
+    /// The title always lands immediately: it is what the list, the search and the exports
+    /// read. The folder is the part that has to wait — a recording or a running chain keeps
+    /// this URL for the length of the run, and moving it would send everything they write next
+    /// into a directory that is no longer there.
+    func rename(_ summary: SessionSummary, to title: String) async {
+        do {
+            if isBusy(summary) {
+                try await environment.store.handle(at: summary.layout.root).setTitle(title)
+                pendingFolderSync.insert(summary.id)
+            } else {
+                try await environment.store.rename(summary, to: title)
+                pendingFolderSync.remove(summary.id)
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        await refresh()
+    }
+
+    /// Notes that a session's folder no longer matches its title.
+    ///
+    /// For the recording that was named while it ran: the folder was created from whatever the
+    /// title was at the first keystroke of the session, which is usually nothing at all.
+    func markFolderOutOfSync(_ id: UUID) {
+        pendingFolderSync.insert(id)
+    }
+
+    /// Moves the folders of sessions renamed while they were busy, now that they are not.
+    ///
+    /// Only sessions this app renamed. Comparing every folder name against its title and
+    /// "fixing" the mismatches would also undo a folder renamed by hand in Finder — and the
+    /// whole point of one-folder-per-session is that it stays editable without the app.
+    private func syncPendingFolders(in scanned: [SessionSummary]) -> [SessionSummary] {
+        guard !pendingFolderSync.isEmpty else { return scanned }
+
+        var settled = scanned
+        for (index, summary) in scanned.enumerated() where pendingFolderSync.contains(summary.id) {
+            guard !isBusy(summary) else { continue }
+            pendingFolderSync.remove(summary.id)
+            do {
+                settled[index] = try environment.store.syncFolderName(of: summary)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+        // A session that is no longer there stops waiting for anything.
+        pendingFolderSync.formIntersection(scanned.map(\.id))
+        return settled
+    }
+
+    /// Whether anything holds this session's folder open right now.
+    private func isBusy(_ summary: SessionSummary) -> Bool {
+        if environment.pipeline?.isRunning(summary.id) == true { return true }
+        // These two states also describe an interrupted session, where moving would in fact be
+        // safe. Not worth telling apart: being cautious costs a folder name that catches up a
+        // moment later, and being wrong costs a recording.
+        return summary.state == .recording || summary.state == .transcribing
     }
 
     /// Accepts an interrupted session as finished.

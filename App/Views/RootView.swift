@@ -1,5 +1,5 @@
 import SwiftUI
-import TranlixStore
+import TranslixStore
 
 struct RootView: View {
     let environment: AppEnvironment
@@ -16,6 +16,11 @@ struct RootView: View {
     /// The session waiting on a yes. An hour of a class is not something a stray click in a
     /// context menu should be able to take away.
     @State private var pendingDeletion: SessionSummary?
+
+    /// The session whose row is currently a text field, and what has been typed into it.
+    @State private var renamingID: UUID?
+    @State private var draftTitle = ""
+    @FocusState private var renameFieldFocused: Bool
 
     init(environment: AppEnvironment, settings: SettingsStore, recorder: RecorderViewModel) {
         self.environment = environment
@@ -38,8 +43,17 @@ struct RootView: View {
             // A finished recording goes straight into transcription, speakers and notes.
             // Nothing here asks the user to press three buttons in the right order.
             recorder.onSessionFinished = { handle in
+                // The folder was named when the session was created, which is usually before
+                // there was a name at all. If one was typed while the class ran, the folder
+                // catches up once the chain lets go of it.
+                let needsFolderSync = recorder.titleChangedWhileRecording
                 environment.pipeline?.start(handle)
-                Task { await library.refresh() }
+                Task {
+                    if needsFolderSync {
+                        library.markFolderOutOfSync(await handle.manifest.id)
+                    }
+                    await library.refresh()
+                }
             }
             await library.load()
             showRecovery = !library.recoverable.isEmpty || !library.remnants.isEmpty
@@ -108,16 +122,14 @@ struct RootView: View {
                 ForEach(SessionGrouping.groups(for: library.sessions)) { group in
                     Section(group.title) {
                         ForEach(group.sessions) { summary in
-                            LibraryRow(
-                                summary: summary,
-                                isProcessing: environment.pipeline?.isRunning(summary.id) == true
-                            )
-                            .tag(SidebarSelection.session(summary.id))
-                            .contextMenu {
-                                Button("Borrar…", role: .destructive) {
-                                    pendingDeletion = summary
+                            row(summary)
+                                .tag(SidebarSelection.session(summary.id))
+                                .contextMenu {
+                                    Button("Renombrar") { beginRename(summary) }
+                                    Button("Borrar…", role: .destructive) {
+                                        pendingDeletion = summary
+                                    }
                                 }
-                            }
                         }
                     }
                 }
@@ -142,6 +154,47 @@ struct RootView: View {
         }
     }
 
+    // MARK: - Renaming
+
+    /// A session in the list, or the field that renames it.
+    @ViewBuilder
+    private func row(_ summary: SessionSummary) -> some View {
+        if renamingID == summary.id {
+            // Seeded with the stored title and only prompted with the displayed one: an
+            // untitled session shows its folder name, and offering that as the text to edit
+            // would turn a stray Enter into a rename to the timestamp.
+            TextField(summary.displayTitle, text: $draftTitle)
+                .textFieldStyle(.plain)
+                .focused($renameFieldFocused)
+                .onAppear { renameFieldFocused = true }
+                .onSubmit { commitRename(summary) }
+                .onExitCommand { renamingID = nil }
+                .onChange(of: renameFieldFocused) { _, focused in
+                    if !focused { commitRename(summary) }
+                }
+        } else {
+            LibraryRow(
+                summary: summary,
+                isProcessing: environment.pipeline?.isRunning(summary.id) == true
+            )
+        }
+    }
+
+    private func beginRename(_ summary: SessionSummary) {
+        draftTitle = summary.title
+        renamingID = summary.id
+    }
+
+    /// Commits once, whether the edit ended with Enter or with a click somewhere else.
+    private func commitRename(_ summary: SessionSummary) {
+        guard renamingID == summary.id else { return }
+        renamingID = nil
+
+        let trimmed = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != summary.title else { return }
+        Task { await library.rename(summary, to: trimmed) }
+    }
+
     @ViewBuilder
     private var detail: some View {
         switch environment.navigation.selection {
@@ -150,9 +203,16 @@ struct RootView: View {
         case let .session(id):
             if let summary = library.summary(withID: id) {
                 SessionView(
-                    summary: summary, environment: environment, settings: settings
+                    summary: summary,
+                    environment: environment,
+                    settings: settings,
+                    onRename: { title in
+                        Task { await library.rename(summary, to: title) }
+                    }
                 )
-                .id(summary.id)
+                // Keyed by the folder rather than by the id alone: renaming a session moves it,
+                // and a view still holding the old path would read a directory that is gone.
+                .id(summary.layout.root)
             } else {
                 ContentUnavailableView("Sesión no encontrada", systemImage: "questionmark.folder")
             }

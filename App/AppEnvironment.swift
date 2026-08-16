@@ -1,10 +1,10 @@
 import Foundation
 import SwiftUI
-import TranlixCapture
-import TranlixDiarize
-import TranlixModel
-import TranlixStore
-import TranlixTranscribe
+import TranslixCapture
+import TranslixDiarize
+import TranslixModel
+import TranslixStore
+import TranslixTranscribe
 
 /// Shared wiring: where recordings live, and the one coordinator that owns capture.
 ///

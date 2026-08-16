@@ -1,6 +1,6 @@
 import AppKit
 import Observation
-import TranlixModel
+import TranslixModel
 
 /// The recording indicator in the system menu bar.
 ///
@@ -107,7 +107,7 @@ final class MenuBarController: NSObject {
     /// and does not shout while nothing is happening.
     private static let idleGlyph: NSImage = {
         let image = NSImage(
-            systemSymbolName: "waveform", accessibilityDescription: "Tranlix"
+            systemSymbolName: "waveform", accessibilityDescription: "Translix"
         ) ?? NSImage()
         image.isTemplate = true
         return image
@@ -181,7 +181,7 @@ extension MenuBarController: NSMenuDelegate {
         guard recorder.isRecording else {
             menu.addItem(command("Grabar", #selector(startRecording), enabled: !recorder.isBusy))
             menu.addItem(.separator())
-            menu.addItem(command("Abrir Tranlix", #selector(goToRecording), enabled: true))
+            menu.addItem(command("Abrir Translix", #selector(goToRecording), enabled: true))
             return
         }
 

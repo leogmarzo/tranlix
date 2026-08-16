@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
-import TranlixDiarize
-import TranlixStore
-import TranlixTranscribe
+import TranslixDiarize
+import TranslixStore
+import TranslixTranscribe
 
 struct SettingsView: View {
     @Bindable var environment: AppEnvironment

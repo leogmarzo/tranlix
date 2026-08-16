@@ -1,7 +1,7 @@
 import SwiftUI
-import TranlixModel
-import TranlixPipeline
-import TranlixStore
+import TranslixModel
+import TranslixPipeline
+import TranslixStore
 
 /// A finished session, as a document you can read and listen to.
 ///
@@ -11,12 +11,29 @@ import TranlixStore
 struct SessionView: View {
     @State private var model: SessionViewModel
 
-    init(summary: SessionSummary, environment: AppEnvironment, settings: SettingsStore) {
+    /// What is in the title field, and what has already been sent off as a rename.
+    @State private var draftTitle: String
+    @State private var committedTitle: String
+    @FocusState private var titleFocused: Bool
+
+    /// Handed in rather than done here. Renaming may have to move the session's folder, which
+    /// has to be coordinated with whatever is still running — and the library is what knows.
+    private let onRename: (String) -> Void
+
+    init(
+        summary: SessionSummary,
+        environment: AppEnvironment,
+        settings: SettingsStore,
+        onRename: @escaping (String) -> Void
+    ) {
         _model = State(
             wrappedValue: SessionViewModel(
                 summary: summary, environment: environment, settings: settings
             )
         )
+        _draftTitle = State(wrappedValue: summary.title)
+        _committedTitle = State(wrappedValue: summary.title)
+        self.onRename = onRename
     }
 
     var body: some View {
@@ -24,6 +41,8 @@ struct SessionView: View {
             if model.isProcessing { PipelineStrip(model: model) }
             if let failure = model.failure, !model.isProcessing { failureBanner(failure) }
             if let problem = model.errorMessage { errorBanner(problem) }
+
+            header
 
             if let player = model.player {
                 TransportBar(model: model, player: player)
@@ -41,7 +60,7 @@ struct SessionView: View {
                 }
             }
         }
-        .navigationTitle(model.summary.displayTitle)
+        .navigationTitle(committedTitle.isEmpty ? model.summary.displayTitle : committedTitle)
         .toolbar { toolbar }
         .task(id: model.summary.id) { await model.load() }
         // The chain writes the transcript, the speakers and the notes; when it finishes there
@@ -49,6 +68,35 @@ struct SessionView: View {
         .onChange(of: model.isProcessing) { _, running in
             if !running { Task { await model.reload() } }
         }
+    }
+
+    // MARK: - Title
+
+    /// The name of the session, as the heading of the document it is.
+    ///
+    /// It used to exist only as the window title, which can be read and not touched — and since
+    /// recording stopped asking for a name up front, most sessions arrive here without one.
+    private var header: some View {
+        TextField(model.summary.displayTitle, text: $draftTitle)
+            .textFieldStyle(.plain)
+            .font(.title2.weight(.semibold))
+            .focused($titleFocused)
+            .onSubmit { commitRename() }
+            .onChange(of: titleFocused) { _, focused in
+                if !focused { commitRename() }
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 12)
+    }
+
+    /// Compared against what was last sent, not against the session on screen: a rename that
+    /// does not move the folder leaves this view in place with a summary that still says the
+    /// old name, and every later click away would send the same rename again.
+    private func commitRename() {
+        let trimmed = draftTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed != committedTitle else { return }
+        committedTitle = trimmed
+        onRename(trimmed)
     }
 
     // MARK: - Toolbar
@@ -151,11 +199,15 @@ struct SessionView: View {
                     }
                 }
             }
-            .padding(22)
+            .padding(Self.columnPadding)
             .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
     }
+
+    /// The inset around the reading column. Panes that centre themselves in the viewport rather
+    /// than flowing from the top have to subtract it, so it is named here rather than inlined.
+    static let columnPadding: CGFloat = 22
 
     private var emptyTranscript: some View {
         ContentUnavailableView(

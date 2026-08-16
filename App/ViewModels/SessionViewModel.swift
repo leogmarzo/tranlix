@@ -1,14 +1,14 @@
 import AppKit
 import Foundation
 import Observation
-import TranlixDiarize
-import TranlixExport
-import TranlixModel
-import TranlixPipeline
-import TranlixPlayback
-import TranlixStore
-import TranlixSummarize
-import TranlixTranscribe
+import TranslixDiarize
+import TranslixExport
+import TranslixModel
+import TranslixPipeline
+import TranslixPlayback
+import TranslixStore
+import TranslixSummarize
+import TranslixTranscribe
 
 /// Everything one session shows, in one place.
 ///

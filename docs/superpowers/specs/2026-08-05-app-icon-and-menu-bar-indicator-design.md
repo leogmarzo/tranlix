@@ -6,7 +6,7 @@ Date: 2026-08-05
 
 Two gaps, both about the app being visible outside its own window.
 
-Tranlix has no icon at all: no asset catalog, no `.icns`. In the Dock and in
+Translix has no icon at all: no asset catalog, no `.icns`. In the Dock and in
 Cmd-Tab it shows the blank placeholder, which is what an unfinished app looks
 like.
 
@@ -117,7 +117,7 @@ selects the record screen in the sidebar.
 
 `RecorderViewModel` currently comes to life as `@State` inside `RootView`, which
 puts it out of reach of the `App` scene where a `MenuBarExtra` has to be
-declared. It moves up to `TranlixApp` and is passed down into `RootView`.
+declared. It moves up to `TranslixApp` and is passed down into `RootView`.
 
 One owner, two readers. The alternative — a second observable mirroring
 `isRecording` / `isPaused` / `elapsed` for the menu bar — would mean two copies
@@ -174,8 +174,8 @@ redundant re-renders a second in two places. `elapsed` is written only when the
 whole second changes; levels keep polling at 80 ms because the meters need them.
 
 **One formatter.** `HH:MM:SS` formatting is inline in `RecordView` and the menu
-bar needs the same string. It moves to `TranlixModel` as a pure function, which
-also puts it under test — the App target has no test target, `TranlixKit` does.
+bar needs the same string. It moves to `TranslixModel` as a pure function, which
+also puts it under test — the App target has no test target, `TranslixKit` does.
 
 ## Files
 
@@ -186,14 +186,14 @@ also puts it under test — the App target has no test target, `TranlixKit` does
 | `App/AppIcon.icon/Assets/lines.svg` | new |
 | `scripts/icon.sh` | new — fallback PNG generation |
 | `project.yml` | icon source entry and build setting |
-| `App/TranlixApp.swift` | owns the recorder and the controller, termination rule |
+| `App/TranslixApp.swift` | owns the recorder and the controller, termination rule |
 | `App/MenuBarController.swift` | new — the status item and its menu |
 | `App/AppEnvironment.swift` | owns `AppNavigation` |
 | `App/Views/RootView.swift` | takes the recorder, binds selection |
 | `App/Views/RecordView.swift` | uses the shared formatter |
 | `App/ViewModels/RecorderViewModel.swift` | second-granularity elapsed |
-| `Packages/TranlixKit/Sources/TranlixModel/ElapsedTime.swift` | new |
-| `Packages/TranlixKit/Tests/TranlixModelTests/ElapsedTimeTests.swift` | new |
+| `Packages/TranslixKit/Sources/TranslixModel/ElapsedTime.swift` | new |
+| `Packages/TranslixKit/Tests/TranslixModelTests/ElapsedTimeTests.swift` | new |
 
 ## Not doing
 

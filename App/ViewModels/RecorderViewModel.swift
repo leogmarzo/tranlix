@@ -1,9 +1,9 @@
 import Foundation
 import Observation
 import SwiftUI
-import TranlixCapture
-import TranlixModel
-import TranlixStore
+import TranslixCapture
+import TranslixModel
+import TranslixStore
 
 /// Drives the Record screen.
 ///
@@ -12,7 +12,18 @@ import TranlixStore
 @MainActor
 @Observable
 final class RecorderViewModel {
-    var title = ""
+    /// Editable while the session runs, not only before it starts.
+    ///
+    /// Saved to the manifest a beat after typing stops, like the notes. Before this it was
+    /// read once, when Grabar was pressed, so a name typed during the class was silently
+    /// thrown away — which is the wrong half of "the name can wait".
+    var title = "" {
+        didSet {
+            guard title != oldValue else { return }
+            scheduleTitleSave()
+        }
+    }
+
     /// Worked out from the audio rather than asked for.
     ///
     /// The pre-recording form is gone, so this was quietly forcing Spanish on every recording
@@ -22,6 +33,12 @@ final class RecorderViewModel {
     /// still does not flap. On the engine that cannot detect, settings falls back to a fixed
     /// language rather than refusing the recording.
     var language: SessionLanguage = .auto
+
+    /// Whether the name was edited after capture started, so the folder still has to catch up.
+    ///
+    /// The folder is named when the session is created and capture holds it open from then on,
+    /// so a name typed mid-class cannot move it. The library does that once the run is over.
+    private(set) var titleChangedWhileRecording = false
 
     private(set) var isRecording = false
 
@@ -85,6 +102,7 @@ final class RecorderViewModel {
     /// The running session, kept so notes and markers can be written to it as they are typed.
     private var handle: SessionHandle?
     private var notesSaveTask: Task<Void, Never>?
+    private var titleSaveTask: Task<Void, Never>?
 
     /// Called after a session finishes, with the session that finished.
     ///
@@ -110,6 +128,7 @@ final class RecorderViewModel {
         notices.removeAll()
         markerCount = 0
         markers.removeAll()
+        titleChangedWhileRecording = false
         notes = ""
         elapsedSeconds = 0
         levels = [:]
@@ -190,10 +209,14 @@ final class RecorderViewModel {
         pollTask = nil
 
         // Flushed rather than left to the debounce: the last thing typed is often the most
-        // important, and the chain reads this file moments from now.
+        // important, and the chain reads both of these moments from now.
+        titleSaveTask?.cancel()
         notesSaveTask?.cancel()
-        if let handle, !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            try? await handle.writeUserNotes(notes)
+        if let handle {
+            try? await handle.setTitle(title)
+            if !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                try? await handle.writeUserNotes(notes)
+            }
         }
 
         var finished: SessionHandle?
@@ -230,6 +253,19 @@ final class RecorderViewModel {
             markers.append((offset: offset, label: trimmed.isEmpty ? "Marcador" : trimmed))
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Saves a beat after typing stops, rather than on every keystroke.
+    private func scheduleTitleSave() {
+        guard handle != nil else { return }
+        titleChangedWhileRecording = true
+        titleSaveTask?.cancel()
+        let text = title
+        titleSaveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled, let handle = self?.handle else { return }
+            try? await handle.setTitle(text)
         }
     }
 

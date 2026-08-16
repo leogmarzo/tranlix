@@ -1,6 +1,6 @@
 # Automatic session kind and language detection
 
-Tranlix should work out what a recording *is* — a university class, a work meeting, or
+Translix should work out what a recording *is* — a university class, a work meeting, or
 something else — and what language it is in, instead of asking the user up front and then
 producing notes shaped by whatever happened to be configured.
 
@@ -103,7 +103,7 @@ and a `.chosenByUser` value is never overwritten. The field is additive and deco
 `decodeIfPresent`, like `diarization` and `transcriptSharedAt`, so existing manifests load
 unchanged and `schemaVersion` does not move.
 
-**The classifier.** A `SessionClassifier` protocol in `TranlixSummarize` with one
+**The classifier.** A `SessionClassifier` protocol in `TranslixSummarize` with one
 implementation that reuses `SummaryProvider`: it builds a `SummaryRequest` whose instruction
 is the classification prompt and whose transcript is the excerpt plus local signals, then
 parses JSON out of the reply. Reusing the provider inherits the HTTP client, keychain

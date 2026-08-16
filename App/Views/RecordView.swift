@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import TranlixModel
+import TranslixModel
 
 /// The live session: what is being captured, and what you want to remember about it.
 ///
@@ -153,33 +153,87 @@ struct RecordView: View {
 
     // MARK: - Controls
 
+    @ViewBuilder
+    private var controls: some View {
+        if model.isRecording {
+            liveControls
+        } else {
+            idleControls
+        }
+    }
+
+    /// Not recording is a state the screen has to say out loud.
+    ///
+    /// Picking "Nueva grabación" in the sidebar opens this view and changes nothing else, so a
+    /// button the size of a toolbar extra reads as one — as if the choice in the sidebar had
+    /// already started something. The band says plainly that nothing is being captured, and
+    /// gives the one action left a size to match: red, spelled out, and the widest control on
+    /// screen.
+    private var idleControls: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 7) {
+                Image(systemName: "circle.dotted")
+                    .foregroundStyle(.secondary)
+                Text("Todavía no se está grabando")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                if let folder = model.lastSessionFolder {
+                    Button("Mostrar en Finder") {
+                        NSWorkspace.shared.activateFileViewerSelecting([folder])
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+
+            Button {
+                Task { await model.start() }
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "record.circle.fill")
+                        .font(.title2)
+                    Text("Grabar")
+                        .font(.title3.weight(.semibold))
+                    Text("⇧⌘R")
+                        .font(.callout)
+                        .opacity(0.65)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .tint(.red)
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .disabled(model.isBusy)
+        }
+        // Same 600/24 as the scrolling column above, so the button lands flush with the meters
+        // rather than floating at its own margin.
+        .padding(.horizontal, 24)
+        .padding(.vertical, 16)
+        .frame(maxWidth: 600)
+        .frame(maxWidth: .infinity)
+        .background(.bar)
+    }
+
     /// Stopping takes two actions on purpose.
     ///
     /// The stop button pauses; finishing is a second, separate button that only exists once
     /// paused. A misplaced click costs a pause, never a class — which is the whole reason the
     /// rest of this app is built the way it is.
-    private var controls: some View {
+    private var liveControls: some View {
         HStack(spacing: 14) {
-            if model.isRecording {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(model.isPaused ? Color.orange : .red)
-                        .frame(width: 9, height: 9)
-                    Text(ElapsedTime.clock(model.elapsedSeconds))
-                        .font(.system(.title2, design: .monospaced))
-                        .fontWeight(.medium)
-                        .contentTransition(.numericText())
-                }
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(model.isPaused ? Color.orange : .red)
+                    .frame(width: 9, height: 9)
+                Text(ElapsedTime.clock(model.elapsedSeconds))
+                    .font(.system(.title2, design: .monospaced))
+                    .fontWeight(.medium)
+                    .contentTransition(.numericText())
             }
 
             Spacer()
-
-            if let folder = model.lastSessionFolder, !model.isRecording {
-                Button("Mostrar en Finder") {
-                    NSWorkspace.shared.activateFileViewerSelecting([folder])
-                }
-                .buttonStyle(.link)
-            }
 
             if model.isPaused {
                 Button {
@@ -195,15 +249,16 @@ struct RecordView: View {
                 Task {
                     if model.isPaused {
                         await model.resume()
-                    } else if model.isRecording {
-                        await model.pause()
                     } else {
-                        await model.start()
+                        await model.pause()
                     }
                 }
             } label: {
-                Label(primaryTitle, systemImage: primaryIcon)
-                    .frame(minWidth: 84)
+                Label(
+                    model.isPaused ? "Reanudar" : "Pausar",
+                    systemImage: model.isPaused ? "play.fill" : "pause.fill"
+                )
+                .frame(minWidth: 84)
             }
             .buttonStyle(.borderedProminent)
             .tint(model.isCapturing ? .red : .accentColor)
@@ -212,16 +267,6 @@ struct RecordView: View {
         }
         .padding(16)
         .background(.bar)
-    }
-
-    private var primaryTitle: String {
-        if model.isPaused { return "Reanudar" }
-        return model.isRecording ? "Pausar" : "Grabar"
-    }
-
-    private var primaryIcon: String {
-        if model.isPaused { return "play.fill" }
-        return model.isRecording ? "pause.fill" : "record.circle"
     }
 
     // MARK: - Side column

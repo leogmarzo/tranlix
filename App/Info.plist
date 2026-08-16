@@ -27,11 +27,11 @@
 
 	<!-- Microphone track. -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Tranlix graba tu micrófono como una pista separada de la sesión.</string>
+	<string>Translix graba tu micrófono como una pista separada de la sesión.</string>
 
 	<!-- System audio track, captured with a Core Audio process tap. This is what replaces
 	     the Screen Recording permission that ScreenCaptureKit would have required. -->
 	<key>NSAudioCaptureUsageDescription</key>
-	<string>Tranlix graba el audio del sistema para transcribir clases y reuniones.</string>
+	<string>Translix graba el audio del sistema para transcribir clases y reuniones.</string>
 </dict>
 </plist>

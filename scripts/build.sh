@@ -16,11 +16,11 @@ command -v xcodegen >/dev/null || {
 xcodegen generate
 
 xcodebuild \
-    -project Tranlix.xcodeproj \
-    -scheme Tranlix \
+    -project Translix.xcodeproj \
+    -scheme Translix \
     -configuration "$CONFIG" \
     -destination 'platform=macOS,arch=arm64' \
     -derivedDataPath ./DerivedData \
     build
 
-echo "Built: $ROOT/DerivedData/Build/Products/$CONFIG/Tranlix.app"
+echo "Built: $ROOT/DerivedData/Build/Products/$CONFIG/Translix.app"

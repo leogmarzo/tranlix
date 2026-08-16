@@ -1,11 +1,11 @@
 import Foundation
 import Observation
-import TranlixDiarize
-import TranlixModel
-import TranlixPipeline
-import TranlixStore
-import TranlixSummarize
-import TranlixTranscribe
+import TranslixDiarize
+import TranslixModel
+import TranslixPipeline
+import TranslixStore
+import TranslixSummarize
+import TranslixTranscribe
 
 /// Runs the chain for whichever sessions are being processed, and reports where each one is.
 ///
