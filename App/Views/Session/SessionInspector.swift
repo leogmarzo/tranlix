@@ -88,6 +88,7 @@ struct SessionInspector: View {
         switch manifest.transcriptionEngine {
         case EngineID.whisperKit.rawValue: "Whisper"
         case EngineID.apple.rawValue: "Apple Speech"
+        case EngineID.assemblyAI.rawValue: "AssemblyAI"
         case let other?: other
         case nil: "—"
         }

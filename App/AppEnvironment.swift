@@ -4,6 +4,7 @@ import TranslixCapture
 import TranslixDiarize
 import TranslixModel
 import TranslixStore
+import TranslixSummarize
 import TranslixTranscribe
 
 /// Shared wiring: where recordings live, and the one coordinator that owns capture.
@@ -19,7 +20,14 @@ final class AppEnvironment {
 
     /// Shared so a loaded Whisper model outlives the session that loaded it, instead of
     /// costing seconds and a gigabyte again on the next one.
-    let engines = TranscriptionEngineRegistry()
+    ///
+    /// The AssemblyAI key is read from the keychain on every use rather than captured once,
+    /// so pasting a key in Settings takes effect without relaunching.
+    let engines = TranscriptionEngineRegistry(
+        assemblyAIKey: {
+            (try? APIKeyStore(service: AssemblyAIEngine.keychainService).read()) ?? nil
+        }
+    )
 
     /// Shared for the same reason, and because the models are cheap enough to keep resident.
     let diarizer = FluidAudioDiarizer()

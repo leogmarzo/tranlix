@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import TranslixDiarize
 import TranslixStore
+import TranslixSummarize
 import TranslixTranscribe
 
 struct SettingsView: View {
@@ -87,6 +88,11 @@ private struct TranscriptionSettingsPane: View {
     @State private var diarizerAvailability: DiarizerAvailability = .ready
     @State private var diarizerBytes: Int64?
 
+    @State private var assemblyAIKeyField = ""
+    @State private var assemblyAIKeyHint: String?
+
+    private let assemblyAIKeys = APIKeyStore(service: AssemblyAIEngine.keychainService)
+
     var body: some View {
         Form {
             Section("Motor") {
@@ -96,6 +102,40 @@ private struct TranscriptionSettingsPane: View {
                     }
                 }
                 Text("Se puede cambiar por sesión. Los resultados de cada motor se guardan por separado, así que probar el otro no descarta el trabajo del primero.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("AssemblyAI") {
+                if let hint = assemblyAIKeyHint {
+                    LabeledContent("API key") {
+                        HStack {
+                            Text(hint)
+                                .foregroundStyle(.secondary)
+                            Button("Borrar", role: .destructive, action: removeAssemblyAIKey)
+                        }
+                    }
+                } else {
+                    // Same construction as the Anthropic field, for the same reason: a bare
+                    // SecureField inside a grouped Form renders its hint as a label and the
+                    // editable area as an unbordered blank.
+                    LabeledContent("API key") {
+                        SecureField("clave de AssemblyAI…", text: $assemblyAIKeyField)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 260)
+                            .onSubmit(saveAssemblyAIKey)
+                    }
+                    HStack {
+                        Spacer()
+                        Button("Guardar", action: saveAssemblyAIKey)
+                            .disabled(
+                                assemblyAIKeyField
+                                    .trimmingCharacters(in: .whitespaces).isEmpty
+                            )
+                    }
+                }
+
+                Text("Con el motor AssemblyAI la grabación se sube a sus servidores y la transcripción y la separación de voces corren allá: la máquina queda libre y cerrar la tapa deja de ser un problema. Cuesta alrededor de US$ 0,32 por hora grabada (las dos pistas), con la key guardada en el llavero, nunca en las preferencias.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -119,8 +159,8 @@ private struct TranscriptionSettingsPane: View {
                 // working rather than like the engine being unable to do it.
                 Text(
                     settings.transcription.canDetectLanguage
-                        ? "El idioma se detecta solo: Whisper lo reconoce en el primer fragmento y el resto de la sesión se transcribe con ese, así una clase en español que cita términos en inglés no se parte al medio."
-                        : "El motor de Apple no puede detectar el idioma — necesita un idioma fijo — así que las grabaciones se transcriben en español. Para que se detecte solo, usá Whisper."
+                        ? "El idioma se detecta solo: el motor lo reconoce al arrancar y el resto de la sesión se transcribe con ese, así una clase en español que cita términos en inglés no se parte al medio."
+                        : "El motor de Apple no puede detectar el idioma — necesita un idioma fijo — así que las grabaciones se transcriben en español. Para que se detecte solo, usá Whisper o AssemblyAI."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -272,6 +312,9 @@ private struct TranscriptionSettingsPane: View {
             if let bytes = status.installedBytes {
                 return "Instalado · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
             }
+            if status.id == .assemblyAI {
+                return "Transcribe y separa voces en el servidor. No ocupa disco."
+            }
             return "Instalado. Los recursos de idioma de Apple los gestiona el sistema."
         case let .needsDownload(bytes):
             return bytes.map {
@@ -287,6 +330,33 @@ private struct TranscriptionSettingsPane: View {
         statuses = await environment.engines.statuses(for: language)
         diarizerAvailability = await environment.diarizer.availability()
         diarizerBytes = environment.diarizer.installedModelBytes()
+        assemblyAIKeyHint = ((try? assemblyAIKeys.read()) ?? nil).map(Self.hint)
+    }
+
+    // MARK: - AssemblyAI key
+
+    private static func hint(_ key: String) -> String {
+        key.count <= 12 ? "•••" : "\(key.prefix(8))…\(key.suffix(4))"
+    }
+
+    private func saveAssemblyAIKey() {
+        do {
+            try assemblyAIKeys.save(assemblyAIKeyField)
+            assemblyAIKeyField = ""
+            // The engine's availability just flipped; the model row should say so now.
+            Task { await refresh() }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func removeAssemblyAIKey() {
+        do {
+            try assemblyAIKeys.delete()
+            Task { await refresh() }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func download(_ id: EngineID) {
