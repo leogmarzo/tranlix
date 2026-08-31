@@ -37,6 +37,20 @@ struct SessionHandleTests {
         }
     }
 
+    @Test("audio sharing is recorded once, and a second send cannot move the date")
+    func audioSharedIsWrittenOnce() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try newSession(in: root)
+            #expect(await handle.manifest.audioSharedAt == nil)
+
+            try await handle.recordAudioShared(at: epoch)
+            try await handle.recordAudioShared(at: epoch.addingTimeInterval(60))
+
+            // A record of a decision, like transcriptSharedAt: written once, auditable after.
+            #expect(await handle.manifest.audioSharedAt == epoch)
+        }
+    }
+
     @Test("a write that fails leaves the in-memory manifest untouched")
     func failedWriteDoesNotDesyncMemory() async throws {
         try await withTemporaryRoot { root in

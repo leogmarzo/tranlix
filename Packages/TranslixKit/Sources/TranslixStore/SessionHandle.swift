@@ -322,6 +322,17 @@ public actor SessionHandle {
         }
     }
 
+    /// Records that this session's audio was uploaded for remote transcription.
+    ///
+    /// Written once and never cleared, exactly like `recordTranscriptShared`: it is a record
+    /// of a decision, not a setting.
+    public func recordAudioShared(at date: Date) throws {
+        try update { manifest in
+            guard manifest.audioSharedAt == nil else { return }
+            manifest.audioSharedAt = date
+        }
+    }
+
     /// Writes a generated summary into `notas/` and returns where it landed.
     public func writeNote(markdown: String, fileName: String) throws -> URL {
         try FileManager.default.createDirectory(

@@ -71,6 +71,34 @@ struct ChainPlannerTests {
         #expect(plan.skipped.contains { $0.stage == .diarization })
     }
 
+    @Test("an engine that separates speakers makes local diarization redundant")
+    func speakerSeparatingEngineCoversDiarization() {
+        let plan = ChainPlanner.plan(
+            manifest: manifest(), request: request(), engine: .ready, diarizer: .ready,
+            engineSeparatesSpeakers: true
+        )
+
+        // The speakers arrive with the transcript; running FluidAudio afterwards would
+        // overwrite them with a second opinion nobody asked for.
+        #expect(plan.stages == [.transcription, .notes])
+        #expect(plan.skipped.contains {
+            $0.stage == .diarization && $0.reason == .coveredByTranscription
+        })
+    }
+
+    @Test("diarization asked for on its own still runs locally")
+    func diarizationAloneStillRunsLocally() {
+        // Re-separating an existing transcript is legitimate — and the remote engine only
+        // brings speakers when it transcribes, so there is nothing covering the stage here.
+        let plan = ChainPlanner.plan(
+            manifest: manifest(), request: request(stages: [.diarization]),
+            engine: .ready, diarizer: .ready,
+            engineSeparatesSpeakers: true
+        )
+
+        #expect(plan.stages == [.diarization])
+    }
+
     @Test("a session with no audio has nothing to do")
     func noAudioRefuses() {
         let empty = SessionManifest(
@@ -127,12 +155,14 @@ private func request(
         templates: [.general: NotesTemplate(instruction: "Resumí", title: "Nota")],
         model: "m", allowance: .confirmedByUser()
     ),
-    force: Bool = false
+    force: Bool = false,
+    stages: Set<PipelineStage> = Set(PipelineStage.allCases)
 ) -> PipelineRequest {
     PipelineRequest(
         language: .fixed("es-CL"),
         engineID: EngineID(rawValue: "stub"),
         notes: notes,
-        force: force
+        force: force,
+        stages: stages
     )
 }
