@@ -17,6 +17,9 @@ public struct EngineID: RawRepresentable, Hashable, Sendable, Codable {
 
     /// Whisper `large-v3-turbo` through WhisperKit's CoreML models.
     public static let whisperKit = EngineID(rawValue: "whisperkit")
+
+    /// AssemblyAI's async API: transcription and speaker separation on their servers.
+    public static let assemblyAI = EngineID(rawValue: "assemblyai")
 }
 
 /// What language to transcribe in.
@@ -132,4 +135,56 @@ public protocol TranscriptionEngine: Sendable {
         language: TranscriptionLanguage,
         track: AudioTrack
     ) async throws -> EngineTranscription
+}
+
+// MARK: - Whole tracks
+
+/// What a track-level engine produced for one whole track file.
+///
+/// Times are in the track's own timeline, exactly as with chunks: only the pipeline knows
+/// where a track sits on the session. Segments arrive with their speaker ids already in the
+/// app's conventions, which is why turns travel alongside — they are the same speakers, in
+/// the shape `diarization.json` stores.
+public struct TrackTranscription: Sendable, Equatable {
+    public var segments: [TranscriptSegment]
+
+    /// Speaker turns for tracks the engine separated. Empty for the microphone, which is
+    /// always one known person.
+    public var turns: [SpeakerTurn]
+
+    /// The language the engine identified, as a bare code such as `es`. `nil` when it was
+    /// told which language to use.
+    public var detectedLanguage: String?
+
+    public init(
+        segments: [TranscriptSegment],
+        turns: [SpeakerTurn] = [],
+        detectedLanguage: String? = nil
+    ) {
+        self.segments = segments
+        self.turns = turns
+        self.detectedLanguage = detectedLanguage
+    }
+}
+
+/// Where a track-level transcription is, for the progress strip.
+public enum TrackTranscriptionPhase: Sendable, Equatable {
+    case uploading(Double)
+    case waiting
+}
+
+/// An engine that transcribes a whole track in one call — and separates its speakers.
+///
+/// This is the remote shape: speaker identity comes from clustering an entire recording, so
+/// a server-side engine wants the whole track, not five-minute chunks that would renumber
+/// the same person over and over. Engines that conform skip the chunk loop *and* the local
+/// diarizer; the chunk method remains for protocol completeness and is routed through the
+/// same implementation.
+public protocol TrackTranscribing: TranscriptionEngine {
+    func transcribe(
+        trackFile: URL,
+        track: AudioTrack,
+        language: TranscriptionLanguage,
+        progress: @escaping @Sendable (TrackTranscriptionPhase) -> Void
+    ) async throws -> TrackTranscription
 }

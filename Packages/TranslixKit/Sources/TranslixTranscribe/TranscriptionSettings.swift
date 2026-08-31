@@ -81,13 +81,19 @@ public struct EngineStatus: Sendable, Identifiable, Equatable {
 /// over a gigabyte of memory; building a fresh engine per session would pay that every time.
 public actor TranscriptionEngineRegistry {
     private let modelsDirectory: URL
+    private let assemblyAIKey: @Sendable () -> String?
     private var whisper: WhisperKitEngine?
+    private var assemblyAI: AssemblyAIEngine?
 
-    public init(modelsDirectory: URL = WhisperKitEngine.defaultModelsDirectory) {
+    public init(
+        modelsDirectory: URL = WhisperKitEngine.defaultModelsDirectory,
+        assemblyAIKey: @escaping @Sendable () -> String? = { nil }
+    ) {
         self.modelsDirectory = modelsDirectory
+        self.assemblyAIKey = assemblyAIKey
     }
 
-    public nonisolated var availableEngineIDs: [EngineID] { [.apple, .whisperKit] }
+    public nonisolated var availableEngineIDs: [EngineID] { [.apple, .whisperKit, .assemblyAI] }
 
     public func engine(_ id: EngineID) -> any TranscriptionEngine {
         switch id {
@@ -95,6 +101,11 @@ public actor TranscriptionEngineRegistry {
             if let whisper { return whisper }
             let engine = WhisperKitEngine(modelsDirectory: modelsDirectory)
             whisper = engine
+            return engine
+        case .assemblyAI:
+            if let assemblyAI { return assemblyAI }
+            let engine = AssemblyAIEngine(apiKey: assemblyAIKey)
+            assemblyAI = engine
             return engine
         default:
             return AppleSpeechEngine()
