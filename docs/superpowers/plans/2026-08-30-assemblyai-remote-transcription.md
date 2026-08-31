@@ -36,11 +36,11 @@
   - `static func segments(for transcript: AssemblyAITranscript, track: AudioTrack) -> (segments: [TranscriptSegment], turns: [SpeakerTurn])` — times in seconds on the track's own timeline; system utterances → one segment per utterance with `speakerID: system-N` renumbered by first speech, plus matching turns (confidence from utterance, default 1); mic (or utterance-less system) → gap-split words, `speakerID: "mic"` for mic, `"system-1"` for the fallback, empty turns for mic.
   - `static let segmentGap: TimeInterval = 1.2`, `static let segmentCap: TimeInterval = 30`
 
-- [ ] Write failing tests: system utterances map (ms→s, renumbering A/B→system-1/2 by first speech, words attached, turns produced); mic words gap-split at ≥1.2 s and at 30 s runs, all `mic`, no turns; system without utterances falls back to single `system-1`; empty/nil words produce empty result.
-- [ ] Run `swift test --package-path Packages/TranslixKit --filter AssemblyAIMapperTests` — expect compile failure/red.
-- [ ] Implement DTOs + mapper.
-- [ ] Tests green.
-- [ ] Commit: `map assemblyai responses onto the app's transcript shapes`
+- [x] Write failing tests: system utterances map (ms→s, renumbering A/B→system-1/2 by first speech, words attached, turns produced); mic words gap-split at ≥1.2 s and at 30 s runs, all `mic`, no turns; system without utterances falls back to single `system-1`; empty/nil words produce empty result.
+- [x] Run `swift test --package-path Packages/TranslixKit --filter AssemblyAIMapperTests` — expect compile failure/red.
+- [x] Implement DTOs + mapper.
+- [x] Tests green.
+- [x] Commit: `map assemblyai responses onto the app's transcript shapes`
 
 ### Task 2: HTTP client
 
@@ -57,9 +57,9 @@
   - Missing key throws `TranscriptionError.modelUnavailable("Falta la clave de API de AssemblyAI. Cargala en Ajustes → Transcripción.")`; non-2xx throws `engineFailed` including the server's message; 401/403 message names the key.
 - Upload progress: report `.uploading(fraction)` via `URLSessionTaskDelegate` `didSendBodyData` (fraction of `totalBytesExpectedToSend`), then `.waiting` once the job is created; wire through a small `NSObject` delegate class.
 
-- [ ] Write failing tests using a `URLProtocol` stub (same pattern as `AnthropicProviderTests` — read it first and mirror the fixture style): upload sends raw bytes with `authorization` header and no Bearer; create body pins `speech_models` and carries `speaker_labels`/`language_code`/`language_detection`; polls until completed; `status: error` throws with AssemblyAI's message; missing key throws before any request.
-- [ ] Red, implement, green.
-- [ ] Commit: `add the assemblyai client behind an injectable transport`
+- [x] Write failing tests using a `URLProtocol` stub (same pattern as `AnthropicProviderTests` — read it first and mirror the fixture style): upload sends raw bytes with `authorization` header and no Bearer; create body pins `speech_models` and carries `speaker_labels`/`language_code`/`language_detection`; polls until completed; `status: error` throws with AssemblyAI's message; missing key throws before any request.
+- [x] Red, implement, green.
+- [x] Commit: `add the assemblyai client behind an injectable transport`
 
 ### Task 3: Engine, protocol, registry
 
@@ -82,8 +82,8 @@
   - Chunk conformance routes through the track path and drops turns.
 - `TranscriptionEngineRegistry.init(modelsDirectory:assemblyAIKey: @Sendable () -> String? = { nil })`; `availableEngineIDs` = `[.apple, .whisperKit, .assemblyAI]`; status for assemblyai: `installedBytes: nil, canRemove: false`.
 
-- [ ] Failing tests: availability with/without key; track call builds the right `AssemblyAIRequest` per track/language (assert via injected client stub recording requests); chunk conformance returns segments.
-- [ ] Red, implement, green. Commit: `add the assemblyai engine and register it`
+- [x] Failing tests: availability with/without key; track call builds the right `AssemblyAIRequest` per track/language (assert via injected client stub recording requests); chunk conformance returns segments.
+- [x] Red, implement, green. Commit: `add the assemblyai engine and register it`
 
 ### Task 4: Model and planner groundwork
 
@@ -97,8 +97,8 @@
 - Produces `manifest.audioSharedAt: Date?`, `SessionHandle.recordAudioShared(at: Date) throws` (idempotent), `SkipReason.coveredByTranscription`, planner param `engineSeparatesSpeakers`.
 - Planner rule: skip diarization as `.coveredByTranscription` only when `engineSeparatesSpeakers` **and** `.transcription` ended up in `stages`; diarization requested alone still runs locally.
 
-- [ ] Failing tests: manifest decodes without the field; audioSharedAt write-once; planner skips diarization with the flag when transcription runs, and does not when transcription was skipped/not requested.
-- [ ] Red, implement, green. Commit: `record audio sharing and let the planner skip covered diarization`
+- [x] Failing tests: manifest decodes without the field; audioSharedAt write-once; planner skips diarization with the flag when transcription runs, and does not when transcription was skipped/not requested.
+- [x] Red, implement, green. Commit: `record audio sharing and let the planner skip covered diarization`
 
 ### Task 5: Remote branch in TranscriptionPipeline
 
@@ -114,8 +114,8 @@
 - `transcribeRemotely` per track with audio: source file (archive if present, else `AudioArchiver.concatenate` into scratch); fingerprint frames+bytes (AVAudioFile length + file size, same as `DiarizationPipeline.fingerprint`); cache via `handle.chunkTranscript(engineID:track:chunkIndex: 0)` and `matches(...)`; miss → `handle.recordAudioShared(at:)` then remote call, persist `ChunkTranscript(chunkIndex: 0, ...)` with track-relative segments; narrow `effective` from `detectedLanguage` before filing (mirror chunk loop); collect system turns.
 - After tracks: shift by `manifest.offset(for:)` (segments, words and turns), sort, write transcript; when system turns exist write `Diarization(diarizerID: engine.id.rawValue, audioFingerprint: <system file fingerprint>, turns:)` + `setDiarizationInfo`; manifest update identical to local path.
 
-- [ ] Failing tests with `StubTrackEngine` + `TemporaryDirectory`/`SilentAudio` helpers: remote path writes transcript with offsets and both tracks interleaved; diarization.json + info written with remote turns; per-track cache hit skips the engine call (stub counts calls); detected language narrows the second track's request and lands in the manifest; audioSharedAt set once; cancellation mid-track reverts state.
-- [ ] Red, implement, green. Commit: `transcribe whole tracks remotely when the engine can`
+- [x] Failing tests with `StubTrackEngine` + `TemporaryDirectory`/`SilentAudio` helpers: remote path writes transcript with offsets and both tracks interleaved; diarization.json + info written with remote turns; per-track cache hit skips the engine call (stub counts calls); detected language narrows the second track's request and lands in the manifest; audioSharedAt set once; cancellation mid-track reverts state.
+- [x] Red, implement, green. Commit: `transcribe whole tracks remotely when the engine can`
 
 ### Task 6: SessionPipeline + PipelinePhase wiring
 
@@ -127,8 +127,8 @@
 **Interfaces:**
 - Details: `.preparingUpload` → "Preparando el audio para subir…"; `.uploading(track, f)` → "Subiendo \(track.spokenName)… NN %"; `.waitingRemote` → "Transcribiendo en el servidor. Podés cerrar la tapa: la app retoma sola."
 
-- [ ] Failing tests: chain with a `StubTrackEngine` runs transcription and skips diarization as covered (and FluidAudio's stub is never called); phase details and monotone fractions for a remote run.
-- [ ] Red, implement, green. Commit: `skip local diarization when the engine separated speakers`
+- [x] Failing tests: chain with a `StubTrackEngine` runs transcription and skips diarization as covered (and FluidAudio's stub is never called); phase details and monotone fractions for a remote run.
+- [x] Red, implement, green. Commit: `skip local diarization when the engine separated speakers`
 
 ### Task 7: App layer and docs
 
@@ -139,12 +139,12 @@
 - Modify: `README.md` (recording pipeline description: local engines or AssemblyAI in the cloud; permissions/privacy paragraph)
 - Modify: `Packages/TranslixKit/Sources/TranslixSummarize/AnthropicProvider.swift` (stale "the one place anything leaves the machine" comment)
 
-- [ ] Implement; `scripts/build.sh` compiles; manual smoke not required for commit.
-- [ ] Commit: `let settings hold an assemblyai key and offer the cloud engine`
+- [x] Implement; `scripts/build.sh` compiles; manual smoke not required for commit.
+- [x] Commit: `let settings hold an assemblyai key and offer the cloud engine`
 
 ### Task 8: Full verification
 
-- [ ] `scripts/test.sh` — entire suite green (fix any exhaustive-switch fallout the compiler finds anywhere, e.g. views switching on phases).
-- [ ] `scripts/build.sh` — app builds.
-- [ ] Re-read the spec top to bottom; check every design point landed (mapper conventions, planner rule, audioSharedAt, phases, settings copy). Fix gaps in place.
-- [ ] Commit anything outstanding: `finish the assemblyai remote transcription path`
+- [x] `scripts/test.sh` — entire suite green (fix any exhaustive-switch fallout the compiler finds anywhere, e.g. views switching on phases).
+- [x] `scripts/build.sh` — app builds.
+- [x] Re-read the spec top to bottom; check every design point landed (mapper conventions, planner rule, audioSharedAt, phases, settings copy). Fix gaps in place.
+- [x] Commit anything outstanding: `finish the assemblyai remote transcription path`
