@@ -40,11 +40,49 @@ struct PipelinePhaseTests {
         #expect(detail.contains("8"))
     }
 
+    @Test("the remote phases explain what is happening, and where")
+    func remotePhasesExplainThemselves() {
+        #expect(PipelinePhase.transcribing(.preparingUpload).detail.contains("subir"))
+        #expect(
+            PipelinePhase.transcribing(.uploading(track: .system, fraction: 0.2)).detail
+                .contains("el audio del sistema")
+        )
+        #expect(
+            PipelinePhase.transcribing(.uploading(track: .mic, fraction: 0.2)).detail
+                .contains("el micrófono")
+        )
+
+        // The one sentence this whole feature exists for: closing the lid is now safe, and
+        // the strip is where the user learns it.
+        let waiting = PipelinePhase.transcribing(.waitingRemote(fraction: 0.5)).detail
+        #expect(waiting.contains("servidor"))
+        #expect(waiting.contains("cerrar la tapa"))
+    }
+
+    @Test("remote fractions ascend through the run, so the bar never walks backwards")
+    func remoteFractionsAscend() {
+        let run: [TranscriptionPhase] = [
+            .preparingUpload,
+            .uploading(track: .mic, fraction: 0.3),
+            .waitingRemote(fraction: 0.4),
+            .uploading(track: .system, fraction: 0.8),
+            .waitingRemote(fraction: 0.9),
+            .archiving,
+            .finished,
+        ]
+        let fractions = run.map(\.fraction)
+
+        #expect(zip(fractions, fractions.dropFirst()).allSatisfy { $0 <= $1 })
+    }
+
     @Test("every phase says something, so the strip is never blank")
     func everyPhaseHasDetail() {
         let phases: [PipelinePhase] = [
             .transcribing(.archiving),
             .transcribing(.finished),
+            .transcribing(.preparingUpload),
+            .transcribing(.uploading(track: .mic, fraction: 0.5)),
+            .transcribing(.waitingRemote(fraction: 0.5)),
             .diarizing(.preparingModel(fraction: 0.5)),
             .diarizing(.separatingVoices(fraction: 0.5)),
             .diarizing(.merging),

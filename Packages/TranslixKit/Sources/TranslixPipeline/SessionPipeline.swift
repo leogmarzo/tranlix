@@ -86,7 +86,10 @@ public actor SessionPipeline {
             manifest: handle.manifest,
             request: request,
             engine: engine.availability(for: request.language),
-            diarizer: diarizer.availability()
+            diarizer: diarizer.availability(),
+            // A track-level engine brings the speakers with the transcript, and the planner
+            // knows not to run the local diarizer over them.
+            engineSeparatesSpeakers: engine is TrackTranscribing
         )
 
         // Refusing is not failing. Nothing ran, so nothing about the recording changed and
