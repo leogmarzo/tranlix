@@ -124,6 +124,42 @@ struct DeepInfraMapperTests {
         #expect(result[0].words.map(\.text) == ["hola", "chau"])
     }
 
+    @Test("words with no segments are grouped rather than silently lost")
+    func wordsWithoutSegmentsStillTranscribe() {
+        // `chunk_level=word` is undocumented, so a response carrying only words is possible.
+        // Returning nothing would be worse than failing: an empty transcript reads as a
+        // recording with no speech in it.
+        let result = DeepInfraMapper.segments(
+            for: response(
+                text: "hola a todos sigamos",
+                segments: [],
+                words: [
+                    DeepInfraWord(start: 0.0, end: 0.4, text: "hola"),
+                    DeepInfraWord(start: 0.5, end: 0.7, text: "a"),
+                    DeepInfraWord(start: 0.8, end: 1.0, text: "todos"),
+                    // A long silence: a new segment starts here.
+                    DeepInfraWord(start: 4.0, end: 4.6, text: "sigamos"),
+                ]
+            ),
+            track: .system
+        )
+
+        #expect(result.map(\.text) == ["hola a todos", "sigamos"])
+        #expect(result[0].words.count == 3)
+        #expect(result[0].start == 0.0)
+        #expect(result[1].start == 4.0)
+    }
+
+    @Test("nothing usable at all yields nothing, rather than an untimed blob")
+    func noSegmentsAndNoWordsYieldNothing() {
+        let result = DeepInfraMapper.segments(
+            for: response(text: "hola", segments: [], words: []),
+            track: .system
+        )
+
+        #expect(result.isEmpty)
+    }
+
     // MARK: - Decoding
 
     @Test("the response decodes from DeepInfra's JSON")
@@ -146,6 +182,59 @@ struct DeepInfraMapperTests {
         #expect(decoded.segments.count == 1)
         #expect(decoded.words?.count == 1)
         #expect(decoded.segments.first?.end == 2.0)
+    }
+
+    @Test("a null timestamp does not cost the whole transcript")
+    func nullTimestampsDecode() throws {
+        // Whisper emits entries with null timings at boundaries and around non-speech. Making
+        // start/end required threw `valueNotFound` and failed the entire session — an hour of
+        // audio lost to one unusable word.
+        let json = Data("""
+        {
+          "text": "hola",
+          "segments": [
+            {"start": null, "end": null, "text": "ruido"},
+            {"start": 1.0, "end": 2.0, "text": "hola"}
+          ],
+          "words": [
+            {"start": null, "end": null, "text": "ruido"},
+            {"start": 1.0, "end": 1.5, "text": "hola"}
+          ]
+        }
+        """.utf8)
+
+        let decoded = try JSONDecoder().decode(DeepInfraTranscription.self, from: json)
+
+        // The unusable entries are dropped, the usable ones survive.
+        #expect(decoded.segments.map(\.text) == ["hola"])
+        #expect(decoded.words?.map(\.text) == ["hola"])
+    }
+
+    @Test("an entry missing its timing keys entirely is dropped, not fatal")
+    func missingTimingKeysDecode() throws {
+        let json = Data("""
+        {
+          "text": "hola",
+          "segments": [{"text": "sin tiempos"}, {"start": 0.0, "end": 1.0, "text": "hola"}],
+          "words": [{"text": "sin tiempos"}]
+        }
+        """.utf8)
+
+        let decoded = try JSONDecoder().decode(DeepInfraTranscription.self, from: json)
+
+        #expect(decoded.segments.map(\.text) == ["hola"])
+        #expect(decoded.words?.isEmpty == true)
+    }
+
+    @Test("a segment with no text at all is dropped rather than fatal")
+    func missingTextDecodes() throws {
+        let json = Data("""
+        {"text": "hola", "segments": [{"start": 0.0, "end": 1.0}, {"start": 1.0, "end": 2.0, "text": "hola"}]}
+        """.utf8)
+
+        let decoded = try JSONDecoder().decode(DeepInfraTranscription.self, from: json)
+
+        #expect(decoded.segments.map(\.text) == ["hola"])
     }
 
     @Test("a response with no words key at all still decodes")

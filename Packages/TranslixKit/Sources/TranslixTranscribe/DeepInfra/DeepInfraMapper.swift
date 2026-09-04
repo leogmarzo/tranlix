@@ -8,6 +8,12 @@ import TranslixModel
 /// hundred times real time. Leaving `speakerID` nil is what lets `SpeakerMerger` do that job
 /// with the logic already written and tested for the on-device engines.
 public enum DeepInfraMapper {
+    /// A silence this long between words starts a new segment when the response carried none.
+    public static let segmentGap: TimeInterval = 1.2
+
+    /// No synthesised segment grows past this, so a monologue still reads in paragraphs.
+    public static let segmentCap: TimeInterval = 30
+
     public static func segments(
         for response: DeepInfraTranscription,
         track: AudioTrack
@@ -25,13 +31,61 @@ public enum DeepInfraMapper {
             )
         }
 
-        guard let words = response.words, !words.isEmpty, !segments.isEmpty else {
+        guard let words = response.words, !words.isEmpty else {
             // Whisper without word timings still transcribes. `SpeakerMerger` already handles
             // a segment it cannot cut: it attributes the whole thing to whoever covers most
             // of it.
             return segments
         }
+
+        // Words but no segments. `chunk_level=word` is undocumented, so a response shaped
+        // this way is possible — and returning nothing would be worse than failing, since an
+        // empty transcript reads as a recording nobody spoke in.
+        guard !segments.isEmpty else { return group(words, track: track) }
+
         return attach(words, to: segments)
+    }
+
+    /// Builds segments out of words alone, cutting at silences and at the cap.
+    private static func group(_ words: [DeepInfraWord], track: AudioTrack) -> [TranscriptSegment] {
+        var segments: [TranscriptSegment] = []
+        var run: [DeepInfraWord] = []
+
+        func flush() {
+            guard let first = run.first, let last = run.last else { return }
+            let text = run.map(\.text)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            guard !text.isEmpty else { run = []; return }
+
+            segments.append(TranscriptSegment(
+                track: track,
+                speakerID: nil,
+                start: first.start,
+                end: last.end,
+                text: text,
+                words: run.map {
+                    TranscriptWord(
+                        text: $0.text.trimmingCharacters(in: .whitespacesAndNewlines),
+                        start: $0.start,
+                        end: $0.end
+                    )
+                }
+            ))
+            run = []
+        }
+
+        for word in words {
+            if let last = run.last, let first = run.first {
+                if word.start - last.end >= segmentGap || word.end - first.start > segmentCap {
+                    flush()
+                }
+            }
+            run.append(word)
+        }
+        flush()
+        return segments
     }
 
     /// Files each word under the segment it belongs to.

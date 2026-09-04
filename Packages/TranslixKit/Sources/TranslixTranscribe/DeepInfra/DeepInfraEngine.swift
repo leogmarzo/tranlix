@@ -135,8 +135,13 @@ public actor DeepInfraEngine: TrackTranscribing {
         do {
             decoded = try JSONDecoder().decode(DeepInfraTranscription.self, from: data)
         } catch {
+            // The body goes in the message. A decoding error on its own names a missing key
+            // and nothing about what actually arrived, which is a diagnosis nobody can make
+            // from the error alone — this one cost a round trip to work out.
+            let body = String(data: data.prefix(400), encoding: .utf8) ?? "(ilegible)"
             throw TranscriptionError.engineFailed(
-                "No se pudo leer la respuesta de DeepInfra: \(error.localizedDescription)"
+                "No se pudo leer la respuesta de DeepInfra: \(error.localizedDescription). "
+                    + "Respondió: \(body)"
             )
         }
 
