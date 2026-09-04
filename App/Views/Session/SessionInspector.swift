@@ -11,6 +11,10 @@ struct SessionInspector: View {
     let model: SessionViewModel
     let manifest: SessionManifest
 
+    /// Filled from the engine registry, so the re-transcribe menu offers whatever engines
+    /// exist rather than the two that existed when it was written.
+    @State private var engines: [EngineStatus] = []
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -70,17 +74,46 @@ struct SessionInspector: View {
             }
 
             Menu("Volver a transcribir") {
-                Button("Con Whisper") { model.retranscribe(with: .whisperKit) }
-                Button("Con Apple Speech") { model.retranscribe(with: .apple) }
+                ForEach(engines) { status in
+                    Button(label(for: status)) { model.retranscribe(with: status.id) }
+                        // Only what genuinely cannot run is blocked. A model that still has
+                        // to be downloaded is pickable — the chain downloads it — and it is
+                        // shown even when blocked, disabled and saying why: hiding it would
+                        // answer "falta la key" with "ese motor no existe".
+                        .disabled(isUnsupported(status))
+                }
             }
             .menuStyle(.button)
             .controlSize(.small)
-            .disabled(model.isProcessing)
+            .disabled(model.isProcessing || engines.isEmpty)
             .padding(.top, 4)
+            .task { engines = await model.engineStatuses() }
 
             Text("Los resultados de cada motor se guardan por separado, así que probar el otro no descarta el trabajo del primero.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Whether this engine cannot run at all, which is the only thing that blocks a choice.
+    private func isUnsupported(_ status: EngineStatus) -> Bool {
+        if case .unsupported = status.availability { return true }
+        return false
+    }
+
+    /// What one engine is called in the menu, and why it cannot be picked when it cannot.
+    private func label(for status: EngineStatus) -> String {
+        switch status.availability {
+        case .ready:
+            "Con \(status.displayName)"
+        case .needsDownload:
+            // Pickable: the chain downloads it. Saying so up front is the difference between
+            // a wait somebody expects and one that looks like a hang.
+            "Con \(status.displayName) — descarga el modelo primero"
+        case .unsupported:
+            // Whisper's reason names a language, AssemblyAI's names the key. Both are
+            // already written once, in the engine; this only says where to go.
+            "Con \(status.displayName) — configuralo en Ajustes"
         }
     }
 
