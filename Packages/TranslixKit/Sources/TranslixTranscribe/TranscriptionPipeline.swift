@@ -89,6 +89,10 @@ public actor TranscriptionPipeline {
             )
             progress(.archiving)
             try await archive(session: handle)
+            // The session is whole again, so whatever an earlier attempt recorded no longer
+            // describes it. Best effort: a cleared flag is cosmetic next to the transcript
+            // that was just written.
+            try? await handle.clearFailure()
             progress(.finished)
             return transcript
         } catch is CancellationError {

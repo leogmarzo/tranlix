@@ -346,6 +346,29 @@ struct TranscriptionPipelineTests {
         }
     }
 
+    @Test("a successful run clears the failure the previous attempt left behind")
+    func successClearsAnOldFailure() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(failAfter: 0)
+
+            await #expect(throws: TranscriptionError.self) {
+                try await TranscriptionPipeline(engine: engine)
+                    .process(session: handle, language: self.language, progress: { _ in })
+            }
+            #expect(await handle.manifest.failure != nil)
+
+            await engine.setFailAfter(nil)
+            try await TranscriptionPipeline(engine: engine)
+                .process(session: handle, language: language, progress: { _ in })
+
+            // Otherwise the session shows a banner describing a failure it has already
+            // recovered from — the transcript is right there on screen underneath it.
+            #expect(await handle.manifest.failure == nil)
+            #expect(await handle.manifest.state == .ready)
+        }
+    }
+
     @Test("a failed re-run leaves a finished session finished")
     func failedRerunKeepsTheSessionReady() async throws {
         try await withTemporaryRoot { root in
