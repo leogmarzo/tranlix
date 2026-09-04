@@ -82,18 +82,24 @@ public struct EngineStatus: Sendable, Identifiable, Equatable {
 public actor TranscriptionEngineRegistry {
     private let modelsDirectory: URL
     private let assemblyAIKey: @Sendable () -> String?
+    private let deepInfraKey: @Sendable () -> String?
     private var whisper: WhisperKitEngine?
     private var assemblyAI: AssemblyAIEngine?
+    private var deepInfra: DeepInfraEngine?
 
     public init(
         modelsDirectory: URL = WhisperKitEngine.defaultModelsDirectory,
-        assemblyAIKey: @escaping @Sendable () -> String? = { nil }
+        assemblyAIKey: @escaping @Sendable () -> String? = { nil },
+        deepInfraKey: @escaping @Sendable () -> String? = { nil }
     ) {
         self.modelsDirectory = modelsDirectory
         self.assemblyAIKey = assemblyAIKey
+        self.deepInfraKey = deepInfraKey
     }
 
-    public nonisolated var availableEngineIDs: [EngineID] { [.apple, .whisperKit, .assemblyAI] }
+    public nonisolated var availableEngineIDs: [EngineID] {
+        [.apple, .whisperKit, .deepInfra, .assemblyAI]
+    }
 
     public func engine(_ id: EngineID) -> any TranscriptionEngine {
         switch id {
@@ -106,6 +112,11 @@ public actor TranscriptionEngineRegistry {
             if let assemblyAI { return assemblyAI }
             let engine = AssemblyAIEngine(apiKey: assemblyAIKey)
             assemblyAI = engine
+            return engine
+        case .deepInfra:
+            if let deepInfra { return deepInfra }
+            let engine = DeepInfraEngine(apiKey: deepInfraKey)
+            deepInfra = engine
             return engine
         default:
             return AppleSpeechEngine()

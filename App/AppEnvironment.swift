@@ -26,6 +26,9 @@ final class AppEnvironment {
     let engines = TranscriptionEngineRegistry(
         assemblyAIKey: {
             (try? APIKeyStore(service: AssemblyAIEngine.keychainService).read()) ?? nil
+        },
+        deepInfraKey: {
+            (try? APIKeyStore(service: DeepInfraEngine.keychainService).read()) ?? nil
         }
     )
 

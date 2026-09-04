@@ -20,6 +20,9 @@ public struct EngineID: RawRepresentable, Hashable, Sendable, Codable {
 
     /// AssemblyAI's async API: transcription and speaker separation on their servers.
     public static let assemblyAI = EngineID(rawValue: "assemblyai")
+
+    /// Whisper `large-v3` on DeepInfra: transcription only, diarized locally afterwards.
+    public static let deepInfra = EngineID(rawValue: "deepinfra")
 }
 
 /// What language to transcribe in.
@@ -173,14 +176,22 @@ public enum TrackTranscriptionPhase: Sendable, Equatable {
     case waiting
 }
 
-/// An engine that transcribes a whole track in one call — and separates its speakers.
+/// An engine that transcribes a whole track in one call.
 ///
-/// This is the remote shape: speaker identity comes from clustering an entire recording, so
-/// a server-side engine wants the whole track, not five-minute chunks that would renumber
-/// the same person over and over. Engines that conform skip the chunk loop *and* the local
-/// diarizer; the chunk method remains for protocol completeness and is routed through the
-/// same implementation.
+/// This is the remote shape: a server-side engine wants the whole track, not five-minute
+/// chunks — and where it separates speakers too, identity comes from clustering the entire
+/// recording, which chunking would renumber over and over. Conforming skips the chunk loop;
+/// the chunk method remains for protocol completeness and is routed through the same
+/// implementation.
 public protocol TrackTranscribing: TranscriptionEngine {
+    /// Whether the transcript arrives with its speakers already attached.
+    ///
+    /// Separate from conforming to this protocol, and the distinction is load-bearing: a
+    /// remote Whisper host transcribes whole tracks but has no idea who is talking, so the
+    /// chain must still run the local diarizer. Reading "remote" as "brings speakers" would
+    /// leave every line of a meeting unattributed.
+    nonisolated var separatesSpeakers: Bool { get }
+
     func transcribe(
         trackFile: URL,
         track: AudioTrack,

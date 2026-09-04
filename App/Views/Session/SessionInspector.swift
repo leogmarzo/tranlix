@@ -122,6 +122,7 @@ struct SessionInspector: View {
         case EngineID.whisperKit.rawValue: "Whisper"
         case EngineID.apple.rawValue: "Apple Speech"
         case EngineID.assemblyAI.rawValue: "AssemblyAI"
+        case EngineID.deepInfra.rawValue: "DeepInfra"
         case let other?: other
         case nil: "—"
         }

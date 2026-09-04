@@ -6,6 +6,9 @@ public actor AssemblyAIEngine: TrackTranscribing {
     public nonisolated let id = EngineID.assemblyAI
     public nonisolated let displayName = "AssemblyAI (nube)"
 
+    /// Speaker labels come back with the transcript, so the local diarizer has nothing to add.
+    public nonisolated let separatesSpeakers = true
+
     /// Keychain service holding the API key. Fixed forever, like the Anthropic one: a
     /// renamed service would silently read back nothing.
     public static let keychainService = "com.leomarzo.tranlix.assemblyai"

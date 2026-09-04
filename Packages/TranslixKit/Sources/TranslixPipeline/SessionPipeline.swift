@@ -87,9 +87,9 @@ public actor SessionPipeline {
             request: request,
             engine: engine.availability(for: request.language),
             diarizer: diarizer.availability(),
-            // A track-level engine brings the speakers with the transcript, and the planner
-            // knows not to run the local diarizer over them.
-            engineSeparatesSpeakers: engine is TrackTranscribing
+            // Only some remote engines bring the speakers with the transcript. A remote
+            // Whisper host does not, and its sessions still need the local diarizer.
+            engineSeparatesSpeakers: (engine as? any TrackTranscribing)?.separatesSpeakers ?? false
         )
 
         // Refusing is not failing. Nothing ran, so nothing about the recording changed and

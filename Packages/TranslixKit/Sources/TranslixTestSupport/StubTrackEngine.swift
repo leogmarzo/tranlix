@@ -11,6 +11,10 @@ public actor StubTrackEngine: TrackTranscribing {
     public nonisolated let id: EngineID
     public nonisolated let displayName = "Stub remoto"
 
+    /// Both remote shapes: an engine that labels speakers itself, and one that only
+    /// transcribes and leaves them to the local diarizer.
+    public nonisolated let separatesSpeakers: Bool
+
     public private(set) var transcribedTracks: [AudioTrack] = []
     public private(set) var prepareCount = 0
 
@@ -29,13 +33,15 @@ public actor StubTrackEngine: TrackTranscribing {
         availability: EngineAvailability = .ready,
         failAfter: Int? = nil,
         delayPerTrack: Duration? = nil,
-        detectedLanguage: String? = nil
+        detectedLanguage: String? = nil,
+        separatesSpeakers: Bool = true
     ) {
         self.id = id
         self.availability = availability
         self.failAfter = failAfter
         self.delayPerTrack = delayPerTrack
         self.detectedLanguage = detectedLanguage
+        self.separatesSpeakers = separatesSpeakers
     }
 
     public var trackCallCount: Int { transcribedTracks.count }
@@ -84,9 +90,22 @@ public actor StubTrackEngine: TrackTranscribing {
             return TrackTranscription(
                 segments: [
                     TranscriptSegment(
-                        track: .mic, speakerID: SessionManifest.micSpeakerID,
+                        track: .mic,
+                        speakerID: separatesSpeakers ? SessionManifest.micSpeakerID : nil,
                         start: 0, end: 1, text: "hola",
                         words: [TranscriptWord(text: "hola", start: 0, end: 1)]
+                    ),
+                ],
+                turns: [],
+                detectedLanguage: language == .automatic ? detectedLanguage : nil
+            )
+        case .system where !separatesSpeakers:
+            // A transcribe-only engine: words, no speakers, no turns.
+            return TrackTranscription(
+                segments: [
+                    TranscriptSegment(
+                        track: .system, speakerID: nil, start: 0, end: 1, text: "buenas",
+                        words: [TranscriptWord(text: "buenas", start: 0, end: 1)]
                     ),
                 ],
                 turns: [],
