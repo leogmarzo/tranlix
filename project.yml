@@ -15,7 +15,7 @@ configs:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "0.1.0"
+    MARKETING_VERSION: "0.2.0"
     CURRENT_PROJECT_VERSION: "1"
     DEVELOPMENT_TEAM: 5DBQ7XM8R8
     # Hardened Runtime is on from day 1 so entitlement problems surface now rather than
