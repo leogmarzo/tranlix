@@ -278,4 +278,67 @@ struct RemoteTranscriptionPipelineTests {
             #expect(await handle.manifest.failure == nil)
         }
     }
+
+    // MARK: - Silence
+
+    @Test("what the engine wrote over a silent track does not reach the transcript")
+    func dropsHallucinationsFromAWholeTrack() async throws {
+        // The affordx session: a microphone that recorded a listener came back as 202
+        // segments, 144 of them "Thank you.", while the system track carried the real
+        // conversation. The transcript has to keep the second and lose the first.
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubTrackEngine(separatesSpeakers: false, segmentsForTrack: { track in
+                switch track {
+                case .mic:
+                    (0 ..< 12).map {
+                        TranscriptSegment(
+                            track: .mic, start: Double($0) * 5, end: Double($0) * 5 + 1,
+                            text: "Thank you."
+                        )
+                    }
+                case .system:
+                    [TranscriptSegment(
+                        track: .system, start: 0, end: 4,
+                        text: "Bueno, arrancamos con el informe."
+                    )]
+                }
+            })
+
+            let transcript = try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            #expect(transcript.segments.map(\.text) == ["Bueno, arrancamos con el informe."])
+        }
+    }
+
+    @Test("the engine's own output is still stored, so the filter can be revisited")
+    func keepsTheRawTrackResultOnDisk() async throws {
+        // The filter runs on the way to the transcript, never on the way to disk. Storing
+        // what the engine actually said is what makes a re-run cost nothing and what would
+        // let a future version rescue a segment this one dropped.
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubTrackEngine(separatesSpeakers: false, segmentsForTrack: { track in
+                track == .mic
+                    ? (0 ..< 12).map {
+                        TranscriptSegment(
+                            track: .mic, start: Double($0) * 5, end: Double($0) * 5 + 1,
+                            text: "Thank you."
+                        )
+                    }
+                    : []
+            })
+
+            _ = try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            let stored = await handle.chunkTranscript(
+                engineID: "assemblyai", track: .mic, chunkIndex: 0
+            )
+            #expect(stored?.segments.count == 12)
+        }
+    }
 }

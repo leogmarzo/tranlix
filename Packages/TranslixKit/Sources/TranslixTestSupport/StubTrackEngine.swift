@@ -28,13 +28,19 @@ public actor StubTrackEngine: TrackTranscribing {
     /// Makes each track take long enough that a test can cancel partway through one.
     private let delayPerTrack: Duration?
 
+    /// Stands in for the canned output when a test needs a track to come back with something
+    /// specific — a Whisper track that decoded silence, say, rather than the tidy two
+    /// speakers the default returns.
+    private let segmentsForTrack: (@Sendable (AudioTrack) -> [TranscriptSegment])?
+
     public init(
         id: EngineID = .assemblyAI,
         availability: EngineAvailability = .ready,
         failAfter: Int? = nil,
         delayPerTrack: Duration? = nil,
         detectedLanguage: String? = nil,
-        separatesSpeakers: Bool = true
+        separatesSpeakers: Bool = true,
+        segmentsForTrack: (@Sendable (AudioTrack) -> [TranscriptSegment])? = nil
     ) {
         self.id = id
         self.availability = availability
@@ -42,6 +48,7 @@ public actor StubTrackEngine: TrackTranscribing {
         self.delayPerTrack = delayPerTrack
         self.detectedLanguage = detectedLanguage
         self.separatesSpeakers = separatesSpeakers
+        self.segmentsForTrack = segmentsForTrack
     }
 
     public var trackCallCount: Int { transcribedTracks.count }
@@ -81,6 +88,14 @@ public actor StubTrackEngine: TrackTranscribing {
 
         progress(.uploading(0.5))
         progress(.waiting)
+
+        if let segmentsForTrack {
+            return TrackTranscription(
+                segments: segmentsForTrack(track),
+                turns: [],
+                detectedLanguage: language == .automatic ? detectedLanguage : nil
+            )
+        }
 
         // Fixed track-relative times, so a test can check exactly where they land on the
         // session timeline. The system track brings two voices and their turns; the mic is

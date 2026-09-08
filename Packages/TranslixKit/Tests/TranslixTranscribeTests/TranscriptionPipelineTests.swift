@@ -581,4 +581,29 @@ struct TranscriptionPipelineTests {
             #expect(await handle.manifest.resolvedLocaleIdentifier == nil)
         }
     }
+
+    // MARK: - Silence
+
+    @Test("what the model wrote over a silent track does not reach the transcript")
+    func dropsHallucinationsFromChunks() async throws {
+        // Not a remote-engine problem: the same sessions show WhisperKit filling a dead
+        // microphone with "Thank you." chunk after chunk. The count only crosses the
+        // threshold once a track's chunks are put together, which is why the filter runs
+        // here and not inside the engine.
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root, micChunks: Array(repeating: 16000, count: 10), systemChunks: [16000]
+            )
+            let engine = StubEngine(textForChunk: { url in
+                url.lastPathComponent.contains("mic") ? "Thank you." : "Bueno, arrancamos."
+            })
+
+            let transcript = try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            #expect(!transcript.segments.contains { $0.text == "Thank you." })
+            #expect(transcript.segments.contains { $0.text == "Bueno, arrancamos." })
+        }
+    }
 }

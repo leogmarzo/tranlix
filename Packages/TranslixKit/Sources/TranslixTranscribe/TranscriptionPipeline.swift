@@ -232,6 +232,12 @@ public actor TranscriptionPipeline {
             progress(.transcribing(completed: completed, total: total, reused: reused))
         }
 
+        // What the model wrote over silence is dropped here, once every chunk of a track has
+        // arrived: a phrase Whisper loops on appears once or twice per chunk, and only the
+        // whole track shows it for what it is. The chunks keep the engine's own answer on
+        // disk, so this costs no re-transcription and stays reversible.
+        segments = HallucinationFilter.filtered(segments)
+
         // Both tracks interleaved into one chronological timeline.
         segments.sort { $0.start < $1.start }
 
@@ -348,10 +354,15 @@ public actor TranscriptionPipeline {
                 trackTurns = result.turns
             }
 
+            // What the model wrote over silence is dropped here rather than before the store,
+            // so the engine's own answer stays on disk and a re-run costs nothing. Judged a
+            // whole track at a time, which is the unit the filter reasons about.
+            let kept = HallucinationFilter.filtered(trackSegments)
+
             // Track-relative times become session-absolute here, and only here, exactly as
             // with chunks.
             let offset = manifest.offset(for: track)
-            merged += trackSegments.map { segment in
+            merged += kept.map { segment in
                 var shifted = segment
                 shifted.start += offset
                 shifted.end += offset
