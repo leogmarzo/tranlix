@@ -64,6 +64,15 @@ public enum PipelinePhase: Sendable, Equatable {
             reused > 0
                 ? "Transcribiendo fragmento \(completed) de \(total) · \(reused) reutilizados"
                 : "Transcribiendo fragmento \(completed) de \(total)"
+        case .preparingUpload:
+            "Preparando el audio para subir…"
+        case let .uploading(track, _):
+            "Subiendo \(track.spokenName)…"
+        case .waitingRemote:
+            // Now simply true: the job runs on the server, polling pauses with sleep and
+            // resumes on wake. Saying so is the point — this line retires the one habit
+            // that used to hang machines.
+            "Transcribiendo en el servidor. Podés cerrar la tapa: la app retoma sola."
         case .archiving:
             "Comprimiendo el audio y verificando antes de borrar los fragmentos…"
         case .finished:

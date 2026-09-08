@@ -10,6 +10,16 @@ public enum TranscriptionPhase: Sendable, Equatable {
 
     case transcribing(completed: Int, total: Int, reused: Int)
 
+    /// Joining chunks into one file per track before it goes up. Remote engines only.
+    case preparingUpload
+
+    /// Sending a track. The fraction covers the whole remote run, so the bar never moves
+    /// backwards between one track's wait and the next track's upload.
+    case uploading(track: AudioTrack, fraction: Double)
+
+    /// The job is running on AssemblyAI's servers; the app is just polling.
+    case waitingRemote(fraction: Double)
+
     /// Compressing the audio and verifying the result before the originals go.
     case archiving
 
@@ -20,6 +30,9 @@ public enum TranscriptionPhase: Sendable, Equatable {
         case let .preparingEngine(fraction): fraction * 0.1
         case let .transcribing(completed, total, _):
             total == 0 ? 0.9 : 0.1 + 0.8 * Double(completed) / Double(total)
+        case .preparingUpload: 0.05
+        case let .uploading(_, fraction): 0.1 + 0.8 * fraction
+        case let .waitingRemote(fraction): 0.1 + 0.8 * fraction
         case .archiving: 0.95
         case .finished: 1
         }
@@ -76,6 +89,10 @@ public actor TranscriptionPipeline {
             )
             progress(.archiving)
             try await archive(session: handle)
+            // The session is whole again, so whatever an earlier attempt recorded no longer
+            // describes it. Best effort: a cleared flag is cosmetic next to the transcript
+            // that was just written.
+            try? await handle.clearFailure()
             progress(.finished)
             return transcript
         } catch is CancellationError {
@@ -126,6 +143,14 @@ public actor TranscriptionPipeline {
         // `process` has normally set this already; doing it here too keeps `transcribe` usable
         // on its own, and setting the same state twice writes the same bytes.
         try await handle.setState(.transcribing)
+
+        // A track-level engine takes whole tracks and brings the speakers with them, so the
+        // chunk loop below — and the local diarizer after it — have nothing to add.
+        if let remote = engine as? TrackTranscribing {
+            return try await transcribeTracks(
+                remote, session: handle, language: effective, progress: progress
+            )
+        }
 
         // Scratch space for chunks rebuilt from an archive. Removed however this ends.
         let scratch = URL(filePath: NSTemporaryDirectory())
@@ -207,6 +232,12 @@ public actor TranscriptionPipeline {
             progress(.transcribing(completed: completed, total: total, reused: reused))
         }
 
+        // What the model wrote over silence is dropped here, once every chunk of a track has
+        // arrived: a phrase Whisper loops on appears once or twice per chunk, and only the
+        // whole track shows it for what it is. The chunks keep the engine's own answer on
+        // disk, so this costs no re-transcription and stays reversible.
+        segments = HallucinationFilter.filtered(segments)
+
         // Both tracks interleaved into one chronological timeline.
         segments.sort { $0.start < $1.start }
 
@@ -226,6 +257,214 @@ public actor TranscriptionPipeline {
             manifest.resolvedLocaleIdentifier = localeIdentifier
         }
         return transcript
+    }
+
+    // MARK: - Whole tracks
+
+    /// The remote path: one job per track, speakers included.
+    private func transcribeTracks(
+        _ remote: any TrackTranscribing,
+        session handle: SessionHandle,
+        language: TranscriptionLanguage,
+        progress: @escaping @Sendable (TranscriptionPhase) -> Void
+    ) async throws -> Transcript {
+        let manifest = await handle.manifest
+        let layout = await handle.layout
+
+        // Scratch space for tracks joined from chunks. Removed however this ends.
+        let scratch = URL(filePath: NSTemporaryDirectory())
+            .appending(path: "translix-remote-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: scratch) }
+
+        let tracks = AudioTrack.allCases.filter { manifest.track($0).totalFrames > 0 }
+        let total = Double(tracks.count)
+
+        var effective = language
+        var merged: [TranscriptSegment] = []
+        var systemTurns: [SpeakerTurn] = []
+        var completed = 0
+
+        progress(.preparingUpload)
+
+        for track in tracks {
+            // Between tracks, which bounds a cancellation to one track's work. A finished
+            // track is already persisted, so stopping here costs nothing on the next run.
+            try Task.checkCancellation()
+
+            let fingerprint = Self.trackFingerprint(manifest.track(track))
+            let cached = await handle.chunkTranscript(
+                engineID: engine.id.rawValue, track: track, chunkIndex: 0
+            )
+
+            let trackSegments: [TranscriptSegment]
+            let trackTurns: [SpeakerTurn]
+            if let cached, cached.matches(
+                engineID: engine.id.rawValue,
+                localeIdentifier: effective.identifier,
+                chunkFingerprint: fingerprint
+            ) {
+                trackSegments = cached.segments
+                // On this path a turn and a segment are the same utterance, so a cached
+                // track rebuilds its turns instead of storing a second copy. Only the
+                // per-utterance confidence is lost, and only on a re-run.
+                trackTurns = track == .system
+                    ? cached.segments.compactMap { segment in
+                        segment.speakerID.map {
+                            SpeakerTurn(speakerID: $0, start: segment.start, end: segment.end)
+                        }
+                    }
+                    : []
+            } else {
+                let file = try trackAudio(track, manifest: manifest, layout: layout, scratch: scratch)
+
+                // The receipt precedes the send, the same rule sharing a transcript follows.
+                try await handle.recordAudioShared(at: Date())
+
+                let done = Double(completed)
+                let result = try await remote.transcribe(
+                    trackFile: file, track: track, language: effective
+                ) { phase in
+                    switch phase {
+                    case let .uploading(fraction):
+                        progress(.uploading(track: track, fraction: (done + 0.6 * fraction) / total))
+                    case .waiting:
+                        progress(.waitingRemote(fraction: (done + 0.8) / total))
+                    }
+                }
+
+                // Narrowed before the result is filed, exactly as the chunk loop does, so
+                // the second track and any re-run are keyed under the language the session
+                // turned out to be.
+                if effective == .automatic, let detected = result.detectedLanguage {
+                    effective = .fixed(detected)
+                }
+
+                // A whole track stored as chunk zero of its engine: the existing store,
+                // reused as-is, is what makes a crash after this line cost nothing.
+                try await handle.writeChunkTranscript(ChunkTranscript(
+                    chunkIndex: 0,
+                    track: track,
+                    engineID: engine.id.rawValue,
+                    localeIdentifier: effective.identifier,
+                    chunkFingerprint: fingerprint,
+                    generatedAt: Date(),
+                    segments: result.segments
+                ))
+                trackSegments = result.segments
+                trackTurns = result.turns
+            }
+
+            // What the model wrote over silence is dropped here rather than before the store,
+            // so the engine's own answer stays on disk and a re-run costs nothing. Judged a
+            // whole track at a time, which is the unit the filter reasons about.
+            let kept = HallucinationFilter.filtered(trackSegments)
+
+            // Track-relative times become session-absolute here, and only here, exactly as
+            // with chunks.
+            let offset = manifest.offset(for: track)
+            merged += kept.map { segment in
+                var shifted = segment
+                shifted.start += offset
+                shifted.end += offset
+                shifted.words = segment.words.map {
+                    TranscriptWord(text: $0.text, start: $0.start + offset, end: $0.end + offset)
+                }
+                return shifted
+            }
+            if track == .system {
+                systemTurns = trackTurns.map {
+                    SpeakerTurn(
+                        speakerID: $0.speakerID,
+                        start: $0.start + offset,
+                        end: $0.end + offset,
+                        confidence: $0.confidence
+                    )
+                }
+            }
+            completed += 1
+        }
+
+        merged.sort { $0.start < $1.start }
+
+        let transcript = Transcript(
+            engineID: engine.id.rawValue,
+            localeIdentifier: effective.identifier,
+            generatedAt: Date(),
+            segments: merged
+        )
+        try await handle.writeTranscript(transcript)
+
+        // The speakers came with the transcript, so diarization is done the moment it is.
+        // Stored in exactly the shape FluidAudio would have left, which is what keeps the
+        // rename sheet and every later run indifferent to which of the two produced it.
+        if !systemTurns.isEmpty {
+            let diarization = Diarization(
+                diarizerID: engine.id.rawValue,
+                generatedAt: Date(),
+                audioFingerprint: Self.trackFingerprint(manifest.track(.system)),
+                turns: systemTurns
+            )
+            try await handle.writeDiarization(diarization)
+            try await handle.setDiarizationInfo(DiarizationInfo(
+                diarizerID: diarization.diarizerID,
+                generatedAt: diarization.generatedAt,
+                speakerCount: diarization.speakerIDs.count
+            ))
+        }
+
+        let engineID = engine.id.rawValue
+        let localeIdentifier = effective.identifier
+        try await handle.update { manifest in
+            manifest.state = .transcribed
+            manifest.transcriptionEngine = engineID
+            manifest.resolvedLocaleIdentifier = localeIdentifier
+        }
+        return transcript
+    }
+
+    /// Identifies a track's audio by its captured length.
+    ///
+    /// Frame count alone, deliberately: the same recording must fingerprint identically
+    /// whether it is read from chunks or from the archive they were compressed into, or a
+    /// run resumed after archiving would re-upload — and re-pay for — work that is already
+    /// on disk.
+    static func trackFingerprint(_ info: TrackInfo) -> String {
+        "frames-\(info.totalFrames)"
+    }
+
+    /// One continuous file for a track: the archive when there is one, otherwise the chunks
+    /// joined into scratch — the same both-cases logic diarization uses.
+    private func trackAudio(
+        _ track: AudioTrack,
+        manifest: SessionManifest,
+        layout: SessionLayout,
+        scratch: URL
+    ) throws -> URL {
+        let info = manifest.track(track)
+
+        if let archive = info.archive {
+            let url = layout.audioDirectory.appending(path: archive.fileName)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+
+        let onDisk = info.chunks.filter {
+            FileManager.default.fileExists(atPath: layout.chunkURL($0).path)
+        }
+        guard !onDisk.isEmpty else {
+            throw TranscriptionError.audioUnreadable(layout.archiveURL(track: track))
+        }
+
+        let joined = scratch.appending(path: "\(track.filePrefix).m4a")
+        try AudioArchiver.concatenate(
+            track: track,
+            chunks: onDisk,
+            layout: layout,
+            sampleRate: manifest.sampleRate,
+            to: joined
+        )
+        return joined
     }
 
     /// Where each chunk's audio can be read from.

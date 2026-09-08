@@ -86,7 +86,10 @@ public actor SessionPipeline {
             manifest: handle.manifest,
             request: request,
             engine: engine.availability(for: request.language),
-            diarizer: diarizer.availability()
+            diarizer: diarizer.availability(),
+            // Only some remote engines bring the speakers with the transcript. A remote
+            // Whisper host does not, and its sessions still need the local diarizer.
+            engineSeparatesSpeakers: (engine as? any TrackTranscribing)?.separatesSpeakers ?? false
         )
 
         // Refusing is not failing. Nothing ran, so nothing about the recording changed and

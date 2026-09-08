@@ -114,6 +114,16 @@ public actor SessionHandle {
         try setState(previous)
     }
 
+    /// Forgets a recorded failure, because the work it describes has since succeeded.
+    ///
+    /// The symmetric half of `failStage`. Without it a session that failed once and was
+    /// retried keeps showing a banner about a failure it has already recovered from, with
+    /// the finished transcript sitting on screen underneath it.
+    public func clearFailure() throws {
+        guard manifest.failure != nil else { return }
+        try update { $0.failure = nil }
+    }
+
     /// Records the host time of a track's first delivered buffer.
     ///
     /// Only the first one counts: the two tracks start at slightly different instants and
@@ -319,6 +329,17 @@ public actor SessionHandle {
             // Inside, so a second writer cannot move a date that is meant to be written once.
             guard manifest.transcriptSharedAt == nil else { return }
             manifest.transcriptSharedAt = date
+        }
+    }
+
+    /// Records that this session's audio was uploaded for remote transcription.
+    ///
+    /// Written once and never cleared, exactly like `recordTranscriptShared`: it is a record
+    /// of a decision, not a setting.
+    public func recordAudioShared(at date: Date) throws {
+        try update { manifest in
+            guard manifest.audioSharedAt == nil else { return }
+            manifest.audioSharedAt = date
         }
     }
 

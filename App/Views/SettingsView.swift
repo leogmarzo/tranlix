@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import TranslixDiarize
 import TranslixStore
+import TranslixSummarize
 import TranslixTranscribe
 
 struct SettingsView: View {
@@ -87,6 +88,14 @@ private struct TranscriptionSettingsPane: View {
     @State private var diarizerAvailability: DiarizerAvailability = .ready
     @State private var diarizerBytes: Int64?
 
+    @State private var assemblyAIKeyField = ""
+    @State private var assemblyAIKeyHint: String?
+    @State private var deepInfraKeyField = ""
+    @State private var deepInfraKeyHint: String?
+
+    private let assemblyAIKeys = APIKeyStore(service: AssemblyAIEngine.keychainService)
+    private let deepInfraKeys = APIKeyStore(service: DeepInfraEngine.keychainService)
+
     var body: some View {
         Form {
             Section("Motor") {
@@ -96,6 +105,70 @@ private struct TranscriptionSettingsPane: View {
                     }
                 }
                 Text("Se puede cambiar por sesión. Los resultados de cada motor se guardan por separado, así que probar el otro no descarta el trabajo del primero.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("DeepInfra") {
+                if let hint = deepInfraKeyHint {
+                    LabeledContent("API key") {
+                        HStack {
+                            Text(hint)
+                                .foregroundStyle(.secondary)
+                            Button("Borrar", role: .destructive, action: removeDeepInfraKey)
+                        }
+                    }
+                } else {
+                    LabeledContent("API key") {
+                        SecureField("token de DeepInfra…", text: $deepInfraKeyField)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 260)
+                            .onSubmit(saveDeepInfraKey)
+                    }
+                    HStack {
+                        Spacer()
+                        Button("Guardar", action: saveDeepInfraKey)
+                            .disabled(
+                                deepInfraKeyField.trimmingCharacters(in: .whitespaces).isEmpty
+                            )
+                    }
+                }
+
+                Text("Transcribe con Whisper large-v3 en sus servidores y separa las voces acá, con el modelo local — que es gratis y tarda segundos. Cuesta alrededor de US$ 0,054 por hora grabada (las dos pistas), unas seis veces menos que AssemblyAI. No usan tu audio para entrenar ni lo guardan en disco.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("AssemblyAI") {
+                if let hint = assemblyAIKeyHint {
+                    LabeledContent("API key") {
+                        HStack {
+                            Text(hint)
+                                .foregroundStyle(.secondary)
+                            Button("Borrar", role: .destructive, action: removeAssemblyAIKey)
+                        }
+                    }
+                } else {
+                    // Same construction as the Anthropic field, for the same reason: a bare
+                    // SecureField inside a grouped Form renders its hint as a label and the
+                    // editable area as an unbordered blank.
+                    LabeledContent("API key") {
+                        SecureField("clave de AssemblyAI…", text: $assemblyAIKeyField)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(maxWidth: 260)
+                            .onSubmit(saveAssemblyAIKey)
+                    }
+                    HStack {
+                        Spacer()
+                        Button("Guardar", action: saveAssemblyAIKey)
+                            .disabled(
+                                assemblyAIKeyField
+                                    .trimmingCharacters(in: .whitespaces).isEmpty
+                            )
+                    }
+                }
+
+                Text("Transcribe y separa voces en sus servidores, todo en un paso. Cuesta alrededor de US$ 0,32 por hora grabada (las dos pistas): es la opción cara, y vale la pena cuando una reunión mezcla español e inglés dentro de la misma frase, que es donde le gana a Whisper. Acordate de desactivar el uso de tus datos en su panel, en Data Controls.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -119,8 +192,8 @@ private struct TranscriptionSettingsPane: View {
                 // working rather than like the engine being unable to do it.
                 Text(
                     settings.transcription.canDetectLanguage
-                        ? "El idioma se detecta solo: Whisper lo reconoce en el primer fragmento y el resto de la sesión se transcribe con ese, así una clase en español que cita términos en inglés no se parte al medio."
-                        : "El motor de Apple no puede detectar el idioma — necesita un idioma fijo — así que las grabaciones se transcriben en español. Para que se detecte solo, usá Whisper."
+                        ? "El idioma se detecta solo: el motor lo reconoce al arrancar y el resto de la sesión se transcribe con ese, así una clase en español que cita términos en inglés no se parte al medio."
+                        : "El motor de Apple no puede detectar el idioma — necesita un idioma fijo — así que las grabaciones se transcriben en español. Para que se detecte solo, usá Whisper o AssemblyAI."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -272,6 +345,12 @@ private struct TranscriptionSettingsPane: View {
             if let bytes = status.installedBytes {
                 return "Instalado · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))"
             }
+            if status.id == .assemblyAI {
+                return "Transcribe y separa voces en el servidor. No ocupa disco."
+            }
+            if status.id == .deepInfra {
+                return "Transcribe en el servidor; las voces se separan acá. No ocupa disco."
+            }
             return "Instalado. Los recursos de idioma de Apple los gestiona el sistema."
         case let .needsDownload(bytes):
             return bytes.map {
@@ -287,6 +366,55 @@ private struct TranscriptionSettingsPane: View {
         statuses = await environment.engines.statuses(for: language)
         diarizerAvailability = await environment.diarizer.availability()
         diarizerBytes = environment.diarizer.installedModelBytes()
+        assemblyAIKeyHint = ((try? assemblyAIKeys.read()) ?? nil).map(Self.hint)
+        deepInfraKeyHint = ((try? deepInfraKeys.read()) ?? nil).map(Self.hint)
+    }
+
+    // MARK: - DeepInfra key
+
+    private func saveDeepInfraKey() {
+        do {
+            try deepInfraKeys.save(deepInfraKeyField)
+            deepInfraKeyField = ""
+            Task { await refresh() }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func removeDeepInfraKey() {
+        do {
+            try deepInfraKeys.delete()
+            Task { await refresh() }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    // MARK: - AssemblyAI key
+
+    private static func hint(_ key: String) -> String {
+        key.count <= 12 ? "•••" : "\(key.prefix(8))…\(key.suffix(4))"
+    }
+
+    private func saveAssemblyAIKey() {
+        do {
+            try assemblyAIKeys.save(assemblyAIKeyField)
+            assemblyAIKeyField = ""
+            // The engine's availability just flipped; the model row should say so now.
+            Task { await refresh() }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func removeAssemblyAIKey() {
+        do {
+            try assemblyAIKeys.delete()
+            Task { await refresh() }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func download(_ id: EngineID) {

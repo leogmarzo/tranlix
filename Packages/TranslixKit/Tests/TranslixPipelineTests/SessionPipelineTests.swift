@@ -40,6 +40,66 @@ struct SessionPipelineTests {
         }
     }
 
+    @Test("a speaker-separating engine leaves the local diarizer untouched")
+    func remoteEngineSkipsLocalDiarizer() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            let diarizer = StubDiarizer(turns: [
+                SpeakerTurn(speakerID: "system-9", start: 0, end: 60),
+            ])
+            let pipeline = SessionPipeline(
+                engine: StubTrackEngine(),
+                diarizer: diarizer,
+                provider: StubProvider(),
+                classifier: StubClassifier()
+            )
+
+            var seen: [PipelineStage] = []
+            for try await phase in pipeline.run(session: handle, request: request()) {
+                if let stage = phase.stage, seen.last != stage { seen.append(stage) }
+            }
+
+            // The speakers came with the transcript. Running FluidAudio afterwards would
+            // overwrite them with a second opinion nobody asked for.
+            #expect(seen == [.transcription, .notes])
+            #expect(await diarizer.runs == 0)
+            #expect(await handle.readDiarization()?.diarizerID == "assemblyai")
+            #expect(await handle.manifest.diarization?.diarizerID == "assemblyai")
+            #expect(await handle.manifest.state == .ready)
+        }
+    }
+
+    @Test("a remote engine that only transcribes still gets its voices separated locally")
+    func transcribeOnlyRemoteEngineStillDiarizes() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            let diarizer = StubDiarizer(turns: [
+                SpeakerTurn(speakerID: "system-1", start: 0, end: 60),
+            ])
+            let pipeline = SessionPipeline(
+                // Whisper on somebody else's GPU: whole tracks, but no idea who is talking.
+                engine: StubTrackEngine(id: .deepInfra, separatesSpeakers: false),
+                diarizer: diarizer,
+                provider: StubProvider(),
+                classifier: StubClassifier()
+            )
+
+            var seen: [PipelineStage] = []
+            for try await phase in pipeline.run(session: handle, request: request()) {
+                if let stage = phase.stage, seen.last != stage { seen.append(stage) }
+            }
+
+            // The saving that pays for this engine is the transcription, not the diarization —
+            // which is free, local, and must still run or every line is unattributed.
+            #expect(seen == [.transcription, .diarization, .notes])
+            #expect(await diarizer.runs == 1)
+            #expect(await handle.manifest.diarization?.diarizerID == "fluidaudio")
+
+            let transcript = try #require(await handle.readTranscript())
+            #expect(transcript.segments.allSatisfy { $0.speakerID != nil })
+        }
+    }
+
     @Test("a processed session is searchable straight away")
     func chainLeavesASearchableIndex() async throws {
         try await withTemporaryRoot { root in

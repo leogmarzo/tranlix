@@ -346,6 +346,29 @@ struct TranscriptionPipelineTests {
         }
     }
 
+    @Test("a successful run clears the failure the previous attempt left behind")
+    func successClearsAnOldFailure() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(failAfter: 0)
+
+            await #expect(throws: TranscriptionError.self) {
+                try await TranscriptionPipeline(engine: engine)
+                    .process(session: handle, language: self.language, progress: { _ in })
+            }
+            #expect(await handle.manifest.failure != nil)
+
+            await engine.setFailAfter(nil)
+            try await TranscriptionPipeline(engine: engine)
+                .process(session: handle, language: language, progress: { _ in })
+
+            // Otherwise the session shows a banner describing a failure it has already
+            // recovered from — the transcript is right there on screen underneath it.
+            #expect(await handle.manifest.failure == nil)
+            #expect(await handle.manifest.state == .ready)
+        }
+    }
+
     @Test("a failed re-run leaves a finished session finished")
     func failedRerunKeepsTheSessionReady() async throws {
         try await withTemporaryRoot { root in
@@ -556,6 +579,31 @@ struct TranscriptionPipelineTests {
 
             #expect(await engine.requestedLanguages.allSatisfy { $0 == .automatic })
             #expect(await handle.manifest.resolvedLocaleIdentifier == nil)
+        }
+    }
+
+    // MARK: - Silence
+
+    @Test("what the model wrote over a silent track does not reach the transcript")
+    func dropsHallucinationsFromChunks() async throws {
+        // Not a remote-engine problem: the same sessions show WhisperKit filling a dead
+        // microphone with "Thank you." chunk after chunk. The count only crosses the
+        // threshold once a track's chunks are put together, which is why the filter runs
+        // here and not inside the engine.
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root, micChunks: Array(repeating: 16000, count: 10), systemChunks: [16000]
+            )
+            let engine = StubEngine(textForChunk: { url in
+                url.lastPathComponent.contains("mic") ? "Thank you." : "Bueno, arrancamos."
+            })
+
+            let transcript = try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            #expect(!transcript.segments.contains { $0.text == "Thank you." })
+            #expect(transcript.segments.contains { $0.text == "Bueno, arrancamos." })
         }
     }
 }

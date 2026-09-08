@@ -34,6 +34,31 @@ struct SessionManifestTests {
 
     // MARK: - On-disk shape
 
+    @Test("a manifest written before audio sharing existed still loads")
+    func decodesWithoutAudioSharedAt() throws {
+        let data = try TranslixJSON.encode(manifest())
+        var json = try #require(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        json.removeValue(forKey: "audioSharedAt")
+        let stripped = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try TranslixJSON.decode(SessionManifest.self, from: stripped)
+        #expect(decoded.audioSharedAt == nil)
+    }
+
+    @Test("the audio sharing date survives the round trip")
+    func audioSharedAtRoundTrips() throws {
+        var subject = manifest()
+        subject.audioSharedAt = Date(timeIntervalSince1970: 42)
+
+        let decoded = try TranslixJSON.decode(
+            SessionManifest.self, from: try TranslixJSON.encode(subject)
+        )
+        #expect(decoded.audioSharedAt == Date(timeIntervalSince1970: 42))
+    }
+
+
     @Test("tracks encode as a JSON object so the manifest stays readable by hand")
     func tracksEncodeAsObject() throws {
         let encoder = JSONEncoder()

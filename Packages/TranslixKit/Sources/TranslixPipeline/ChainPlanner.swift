@@ -13,6 +13,8 @@ public enum SkipReason: Sendable, Equatable {
     case modelUnavailable(String)
     /// The caller asked for a single stage, and this is not it.
     case notRequested
+    /// The transcription engine separates speakers itself, so the stage arrives done.
+    case coveredByTranscription
 }
 
 /// What a run would do, worked out before it does any of it.
@@ -40,7 +42,8 @@ public enum ChainPlanner {
         manifest: SessionManifest,
         request: PipelineRequest,
         engine: EngineAvailability,
-        diarizer: DiarizerAvailability
+        diarizer: DiarizerAvailability,
+        engineSeparatesSpeakers: Bool = false
     ) -> ChainPlan {
         guard manifest.hasAudio else {
             return ChainPlan(
@@ -77,6 +80,10 @@ public enum ChainPlanner {
         // Diarization is optional, so anything wrong with it is a skip and the chain goes on.
         if !request.stages.contains(.diarization) {
             skip(.diarization, .notRequested)
+        } else if engineSeparatesSpeakers, stages.contains(.transcription) {
+            // The speakers arrive with the transcript. Only when transcription actually runs,
+            // though: asked for on its own, the stage still means the local diarizer.
+            skip(.diarization, .coveredByTranscription)
         } else if case let .unsupported(reason) = diarizer {
             skip(.diarization, .modelUnavailable(reason))
         } else if !request.force, manifest.diarization != nil {

@@ -161,6 +161,18 @@ final class SessionViewModel {
         run(stages: [.transcription, .diarization], force: true)
     }
 
+    /// Every engine that could re-transcribe this session, and whether it can right now.
+    ///
+    /// Asked of the registry rather than listed by hand: the inspector used to name two
+    /// engines in its menu, so adding a third left it invisible exactly where a user goes to
+    /// switch engines. Unusable ones are still worth returning — a missing API key should
+    /// read as a key that is missing, not as an engine that does not exist.
+    func engineStatuses() async -> [EngineStatus] {
+        await environment.engines.statuses(
+            for: settings.language(for: manifest?.language ?? .auto)
+        )
+    }
+
     func reprocessSpeakers() {
         run(stages: [.diarization], force: true)
     }
