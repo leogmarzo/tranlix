@@ -44,7 +44,16 @@ let package = Package(
             dependencies: ["TranslixStore", "TranslixModel", "TranslixTestSupport"]
         ),
 
-        .target(name: "TranslixCapture", dependencies: ["TranslixModel", "TranslixStore"]),
+        // Converting a raised NSException into a Swift error. Its own target because a
+        // SwiftPM target is single-language, and it is a dependency of Capture rather than a
+        // member of the product: nothing outside Capture has any business raising or
+        // catching Objective-C exceptions.
+        .target(name: "TranslixObjC"),
+
+        .target(
+            name: "TranslixCapture",
+            dependencies: ["TranslixModel", "TranslixStore", "TranslixObjC"]
+        ),
         .testTarget(
             name: "TranslixCaptureTests",
             dependencies: ["TranslixCapture", "TranslixStore", "TranslixModel", "TranslixTestSupport"]
