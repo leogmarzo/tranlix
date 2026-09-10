@@ -47,6 +47,15 @@ enum CoreAudioProperties {
         )
     }
 
+    static func defaultInputDeviceID() throws -> AudioObjectID {
+        try value(
+            kAudioHardwarePropertyDefaultInputDevice,
+            on: AudioObjectID(kAudioObjectSystemObject),
+            default: AudioObjectID(kAudioObjectUnknown),
+            describedAs: "no se pudo leer el dispositivo de entrada por omisión"
+        )
+    }
+
     static func deviceUID(_ device: AudioObjectID) throws -> String {
         var address = address(kAudioDevicePropertyDeviceUID)
         var uid: CFString? = nil

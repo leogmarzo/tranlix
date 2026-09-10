@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import Foundation
 import TranslixModel
 
@@ -256,6 +257,24 @@ public final class MicrophoneSource: AudioSource, @unchecked Sendable {
         }
     }
 
+    /// Names the input the way the system track names its output, so a device storm reads as
+    /// one story in the manifest instead of two halves written in different languages.
+    ///
+    /// Worth the extra call: the previous wording said only that something had been
+    /// reconfigured, which is exactly the sentence that made the last post-mortem harder than
+    /// it needed to be.
+    private func describeInput() -> String {
+        guard engine?.inputNode.outputFormat(forBus: 0).sampleRate ?? 0 > 0 else {
+            return "dispositivo de entrada desconectado"
+        }
+        guard let device = try? CoreAudioProperties.defaultInputDeviceID(),
+              device != AudioObjectID(kAudioObjectUnknown)
+        else {
+            return "entrada de audio reconfigurada"
+        }
+        return "entrada cambiada a \(CoreAudioProperties.deviceName(device))"
+    }
+
     /// `graphQueue` only.
     private func rebuild() {
         // Nothing to rebuild if the graph is already gone: stopped, or mid-rebuild by the
@@ -268,10 +287,7 @@ public final class MicrophoneSource: AudioSource, @unchecked Sendable {
         lock.unlock()
         guard let sink else { return }
 
-        let detail = engine?.inputNode.outputFormat(forBus: 0).sampleRate ?? 0 > 0
-            ? "entrada de audio reconfigurada"
-            : "dispositivo de entrada desconectado"
-        onDeviceChange?(detail)
+        onDeviceChange?(describeInput())
 
         do {
             try buildGraph(into: sink)

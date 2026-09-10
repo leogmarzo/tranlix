@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import Foundation
 import Testing
 
@@ -70,5 +71,18 @@ struct MicrophoneSourceTests {
         #expect(source.isCapturing)
         source.stop()
         #expect(source.isCapturing == false)
+    }
+
+    @Test(
+        "the default input device can be named",
+        .enabled(if: MicrophoneSourceTests.hardwareEnabled)
+    )
+    func inputDeviceHasAName() throws {
+        // What a device change writes into the manifest. The system track has always named
+        // its output; the microphone said only that something had been "reconfigured", which
+        // is the sentence that made the last crash harder to read than it needed to be.
+        let device = try CoreAudioProperties.defaultInputDeviceID()
+        #expect(device != AudioObjectID(kAudioObjectUnknown))
+        #expect(CoreAudioProperties.deviceName(device) != "dispositivo desconocido")
     }
 }
