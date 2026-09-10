@@ -339,6 +339,15 @@ final class RecorderViewModel {
                 text: "\(name(of: track)): se perdieron \(frames) muestras, la grabación tiene huecos",
                 isSevere: true
             ))
+        case let .captureLost(track, detail):
+            // Severe, unlike the first stall: at this point the track has missed several
+            // attempts, and whatever is being recorded is going to be missing it.
+            notices.append(Notice(text: "\(name(of: track)): \(detail)", isSevere: true))
+        case let .captureRestored(track):
+            notices.append(Notice(
+                text: "\(name(of: track)): volvió a entregar audio",
+                isSevere: false
+            ))
         case .paused, .resumed:
             // The buttons already say which it is; a notice would only be noise.
             break
