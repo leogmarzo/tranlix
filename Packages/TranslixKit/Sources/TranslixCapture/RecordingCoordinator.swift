@@ -14,6 +14,13 @@ public enum RecordingEvent: Sendable, Equatable {
     /// rather than hidden so that a recording with holes is never presented as intact.
     case droppedFrames(AudioTrack, Int)
 
+    /// A track could not be brought back after repeated attempts. The session continues on
+    /// whatever is still alive; retries go on quietly in case the device returns.
+    case captureLost(AudioTrack, String)
+
+    /// A track that had been given up on started delivering audio again.
+    case captureRestored(AudioTrack)
+
     case paused(offset: TimeInterval)
     case resumed(pausedFor: TimeInterval)
 
@@ -40,6 +47,21 @@ public struct RecordingConfiguration: Sendable {
     /// looks like death, and short enough that a dead microphone costs seconds rather than the
     /// rest of the meeting.
     public var livenessCheckInterval: TimeInterval = 5
+
+    /// Consecutive stalled checks before a track is treated as unrecoverable.
+    ///
+    /// The point is not to stop trying — a device that came back once can come back again —
+    /// but to stop *reporting*. Every report closes the chunk in progress, so announcing a
+    /// dead microphone every five seconds for the rest of a meeting would leave hundreds of
+    /// near-empty files behind and bury the one notice that mattered.
+    public var maxRestartAttempts: Int = 3
+
+    /// How many stalled checks pass between the quiet retries of a track already given up on.
+    ///
+    /// Restarting a backend is not free, and hammering a wedged audio device several times a
+    /// minute is how the microphone graph was being mutated when the app aborted. Once it is
+    /// clear the track is not coming straight back, ask far less often.
+    public var unrecoverableRetryEvery: Int = 12
 
     public init() {}
 }
@@ -77,9 +99,17 @@ public actor RecordingCoordinator {
     /// Frames each track had at the previous liveness check.
     private var lastObservedFrames: [AudioTrack: Int64] = [:]
 
-    /// Tracks already reported as stalled, so one dead microphone leaves one entry in the
-    /// manifest rather than one every few seconds for the rest of the session.
-    private var stalledTracks: Set<AudioTrack> = []
+    /// How many consecutive checks each track has been found stalled on.
+    ///
+    /// A count rather than a set, because it has to separate three situations a flag cannot:
+    /// the first stall, which is worth reporting; the stretch of failed retries after it,
+    /// which is not; and the moment the track is declared lost, which is. It also covers the
+    /// failure mode where `start` succeeds and the track stays dead anyway, which no amount
+    /// of inspecting the restart's return value would catch.
+    private var stallCounts: [AudioTrack: Int] = [:]
+
+    /// Tracks already announced as lost, so recovering announces itself exactly once.
+    private var lostTracks: Set<AudioTrack> = []
 
     private let events = AsyncStream.makeStream(of: RecordingEvent.self)
 
@@ -344,18 +374,31 @@ public actor RecordingCoordinator {
     /// close the chunk in progress so the discontinuity lands on a file boundary, and to note
     /// the event in the manifest so it is not mistaken for a bug when reviewing later.
     private func handleDeviceChange(_ track: AudioTrack, detail: String) async {
+        await recordTrackEvent(track, detail: detail, emitting: .deviceChanged(track, detail))
+    }
+
+    /// Notes something that happened to one track's capture, on the timeline and in the UI.
+    ///
+    /// Closing the chunk in progress is the part that has to happen first: it puts the
+    /// discontinuity on a file boundary instead of inside a file. That is also why callers
+    /// are sparing about reaching here — every call leaves a short chunk behind.
+    private func recordTrackEvent(
+        _ track: AudioTrack,
+        detail: String,
+        emitting event: RecordingEvent
+    ) async {
         guard isRecording, let handle else { return }
         recorders[track]?.rollOverChunk()
         await flushTrack(track)
 
-        let event = DeviceChangeEvent(
+        let change = DeviceChangeEvent(
             track: track,
             offset: await elapsed(),
             detail: detail,
             occurredAt: Date()
         )
-        try? await handle.recordDeviceChange(event)
-        emit(.deviceChanged(track, detail))
+        try? await handle.recordDeviceChange(change)
+        emit(event)
     }
 
     // MARK: - Liveness
@@ -404,38 +447,93 @@ public actor RecordingCoordinator {
             let previous = lastObservedFrames[track]
             lastObservedFrames[track] = frames
 
-            // A track with no frames at all has not stalled — it never started, which `start`
-            // has already reported.
-            guard frames > 0, previous == frames else {
-                stalledTracks.remove(track)
+            // No baseline to compare against: the first check of the session, or the first
+            // after a pause dropped it. Judging a track on this one would call every resumed
+            // session recovered, including the tracks that are still dead.
+            guard let previous else { continue }
+
+            if frames > previous {
+                await noteAlive(track)
                 continue
             }
-            await restart(track, reporting: stalledTracks.insert(track).inserted)
+            // A track with no frames at all has not stalled — it never started, which `start`
+            // has already reported.
+            guard frames > 0 else { continue }
+            await handleStall(track)
         }
     }
 
-    /// Stops and starts one track's backend.
-    ///
-    /// Retried on every check for as long as the track stays dead, since a backend that could
-    /// not come back once may well come back later. Recorded only the first time, so a
-    /// microphone that never recovers leaves one clear entry instead of hundreds.
-    private func restart(_ track: AudioTrack, reporting: Bool) async {
-        guard let recorder = recorders[track], let source = sources[track] else { return }
+    /// A track is delivering audio again.
+    private func noteAlive(_ track: AudioTrack) async {
+        stallCounts[track] = nil
+        guard lostTracks.remove(track) != nil else { return }
+        let detail = "\(track.spokenName) volvió a entregar audio"
+        await recordTrackEvent(track, detail: detail, emitting: .captureRestored(track))
+    }
 
-        source.stop()
-        let detail: String
-        do {
-            try source.start(into: recorder)
-            detail = "\(track.spokenName) dejó de entregar audio; se reinició"
-        } catch {
-            detail = """
-            \(track.spokenName) dejó de entregar audio y no se pudo reiniciar: \
-            \(error.localizedDescription)
-            """
+    /// One track has been found stalled again. Decides what to try and what to say about it.
+    ///
+    /// The restart itself is cheap to repeat and worth repeating: a backend that could not
+    /// come back once often comes back later, and a device that was unplugged gets plugged
+    /// in again. What is expensive is *announcing* it, since every announcement closes the
+    /// chunk in progress. So the announcements are the thing rationed here — the first
+    /// stall, then once more when the track is presumed gone — and after that the retries
+    /// continue quietly and far less often.
+    private func handleStall(_ track: AudioTrack) async {
+        let limit = max(1, configuration.maxRestartAttempts)
+        let count = (stallCounts[track] ?? 0) + 1
+        stallCounts[track] = count
+
+        guard count <= limit else {
+            let every = max(1, configuration.unrecoverableRetryEvery)
+            guard (count - limit) % every == 0 else { return }
+            await restart(track)
+            return
         }
 
-        guard reporting else { return }
-        await handleDeviceChange(track, detail: detail)
+        let failure = await restart(track)
+
+        if count == limit {
+            lostTracks.insert(track)
+            var detail = """
+            \(track.spokenName) sigue sin entregar audio después de \(limit) intentos; \
+            la sesión continúa sin esa pista
+            """
+            if let failure { detail += ": \(failure.localizedDescription)" }
+            await recordTrackEvent(track, detail: detail, emitting: .captureLost(track, detail))
+        } else if count == 1 {
+            let detail = if let failure {
+                """
+                \(track.spokenName) dejó de entregar audio y no se pudo reiniciar: \
+                \(failure.localizedDescription)
+                """
+            } else {
+                "\(track.spokenName) dejó de entregar audio; se reinició"
+            }
+            await recordTrackEvent(track, detail: detail, emitting: .deviceChanged(track, detail))
+        }
+    }
+
+    /// Stops and starts one track's backend, reporting nothing.
+    ///
+    /// Deliberately free of suspension points between stopping and starting. Everything on
+    /// this actor is serialized against everything else, so leaving no `await` in the middle
+    /// is what guarantees a restart cannot interleave with stopping, pausing or finishing the
+    /// session — and therefore that nothing else is touching the backend's graph while it is
+    /// being rebuilt.
+    ///
+    /// - Returns: why the backend could not be started, or `nil` if it started.
+    @discardableResult
+    private func restart(_ track: AudioTrack) async -> (any Error)? {
+        guard let recorder = recorders[track], let source = sources[track] else { return nil }
+
+        source.stop()
+        do {
+            try source.start(into: recorder)
+            return nil
+        } catch {
+            return error
+        }
     }
 
     private func startDiskMonitor() {
@@ -536,7 +634,8 @@ public actor RecordingCoordinator {
         livenessCheck?.cancel()
         livenessCheck = nil
         lastObservedFrames.removeAll()
-        stalledTracks.removeAll()
+        stallCounts.removeAll()
+        lostTracks.removeAll()
 
         for source in sources.values { source.stop() }
         for recorder in recorders.values { recorder.stop() }

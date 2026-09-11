@@ -277,6 +277,13 @@ public struct SessionStore: Sendable {
     /// chunk boundaries are a window in which a crash makes a real recording look empty —
     /// and an empty session is something the app offers to delete.
     ///
+    /// "Interrupted" covers a crash, not only a force quit. A session left in `.recording`
+    /// because the process died mid-capture arrives here exactly like one the user killed:
+    /// the chunks are on disk, their real lengths are read back from the files rather than
+    /// trusted from the manifest, and the truncated last chunk is adopted at its true length
+    /// or dropped. That is what kept a fifty-seven-minute recording when the app aborted on
+    /// 2026-09-10.
+    ///
     /// Returns the sessions whose manifest was corrected.
     @discardableResult
     public func reconcileInterruptedSessions() async -> [URL] {

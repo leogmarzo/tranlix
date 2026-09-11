@@ -167,6 +167,10 @@ struct RecordingCoordinatorTests {
             let manifest = await handle.manifest
             #expect(manifest.track(.mic).totalFrames == 16000)
             #expect(manifest.track(.system).totalFrames == 0)
+            // A source that never started is never recorded, so nothing ever stops it. That
+            // is why `stop` has to be safe on a source that never ran: `deinit` is the path
+            // that actually reaches it.
+            #expect(sources.system.stopCount == 0)
         }
     }
 

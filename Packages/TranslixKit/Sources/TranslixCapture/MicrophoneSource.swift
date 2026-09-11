@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import Foundation
 import TranslixModel
 
@@ -8,19 +9,56 @@ import TranslixModel
 /// interfaces — and everything downstream wants 16 kHz mono, so a converter sits in the tap.
 /// Its buffers are allocated once and reused: the tap block runs close enough to real time
 /// that allocating per callback is asking for dropouts.
+///
+/// The one invariant everything here serves: **between `stop()` and `start(into:)` this
+/// object owns no engine, no tap and no observer, and every mutation of that triple happens
+/// on `graphQueue`.**
+///
+/// An earlier version kept one engine for the life of the process, tracked an `isRunning`
+/// flag alongside it, and serialized none of it. On 2026-09-10 that aborted the app
+/// fifty-seven minutes into a recording. The mechanism is reproducible and is in the tests:
+/// racing `start` against `stop` raises `required condition is false: nullptr == Tap()` —
+/// a tap installed on a bus that already had one. It happened because `stop()` skipped
+/// `removeTap` whenever `isRunning` was false, and `isRunning` was false for the whole
+/// window between installing a tap and the engine finishing its start, as well as after any
+/// failed rebuild, since the rebuild path never cleared the flag.
+///
+/// A fresh engine per start has no bus that could already carry a tap and no cached format to
+/// go stale — the second hazard, which was never reproduced but which a long-lived engine
+/// makes possible: the input node caches the format it was built with, and a device storm can
+/// leave that cache permanently disagreeing with the hardware. `engine != nil` is now the
+/// whole state, so there is no second flag to forget to clear.
 public final class MicrophoneSource: AudioSource, @unchecked Sendable {
     public let track: AudioTrack = .mic
     public var onDeviceChange: (@Sendable (String) -> Void)?
 
     private let targetFormat: AVAudioFormat
-    private let engine = AVAudioEngine()
+
+    /// Serializes every mutation of the engine, the tap and the observer.
+    ///
+    /// Deliberately not `lock`: that one is taken inside the real-time tap callback, and a
+    /// callback waiting on a thread that is inside `engine.start()` is a priority inversion
+    /// measured in dropouts. Two rules keep them apart, and a future edit must not break
+    /// either: **nothing running on this queue may block on the recording coordinator's
+    /// actor** — `onDeviceChange`'s only implementation spawns a `Task` and returns — and
+    /// **`lock` is never held across an `AVAudioEngine` call.**
+    private let graphQueue = DispatchQueue(
+        label: "com.leomarzo.tranlix.mic-graph", qos: .userInitiated
+    )
+
+    /// Publishes the tap's working set to the real-time callback, and nothing else.
     private let lock = NSLock()
 
+    /// `graphQueue` only. Non-nil exactly while a graph is built and running.
+    private var engine: AVAudioEngine?
+    /// `graphQueue` only.
+    private var configurationObserver: (any NSObjectProtocol)?
+
+    /// Published under `lock`, written only from `graphQueue`.
+    private var sink: (any AudioSink)?
     private var converter: AVAudioConverter?
     private var outputBuffer: AVAudioPCMBuffer?
-    private var sink: (any AudioSink)?
-    private var configurationObserver: (any NSObjectProtocol)?
-    private var isRunning = false
+    private var tapFormat: AVAudioFormat?
 
     public init(sampleRate: Double = 16000) throws {
         guard let format = AVAudioFormat(
@@ -35,9 +73,11 @@ public final class MicrophoneSource: AudioSource, @unchecked Sendable {
     }
 
     deinit {
-        if let configurationObserver {
-            NotificationCenter.default.removeObserver(configurationObserver)
-        }
+        // Deliberately not `graphQueue.sync`. A block queued on that queue holds a temporary
+        // strong reference, so the last release can land on the queue itself, and `sync` onto
+        // the current serial queue deadlocks. By the time this runs nothing else can reach
+        // the graph, so the serialization it would buy is worth nothing anyway.
+        teardown()
     }
 
     /// Asks for microphone access, returning whether it was granted.
@@ -49,34 +89,69 @@ public final class MicrophoneSource: AudioSource, @unchecked Sendable {
         }
     }
 
-    public func start(into sink: any AudioSink) throws {
-        lock.lock()
-        self.sink = sink
-        lock.unlock()
+    /// Whether a graph is currently built and running. For tests.
+    var isCapturing: Bool { graphQueue.sync { engine != nil } }
 
-        observeConfigurationChanges()
-        try startEngine()
+    // MARK: - Lifecycle
+
+    public func start(into sink: any AudioSink) throws {
+        // Synchronous on purpose. `RecordingCoordinator.restart` has no suspension point
+        // between stopping a source and starting it again, and that is what keeps a restart
+        // from interleaving with stopping, pausing or finishing the session. An async
+        // `start` would hand that guarantee back.
+        try graphQueue.sync {
+            do {
+                try buildGraph(into: sink)
+            } catch {
+                teardown()
+                throw error
+            }
+        }
     }
 
     public func stop() {
-        lock.lock()
-        let wasRunning = isRunning
-        isRunning = false
-        sink = nil
-        lock.unlock()
-
-        guard wasRunning else { return }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
+        graphQueue.sync { teardown() }
     }
 
-    // MARK: - Engine
+    // MARK: - Graph
 
-    private func startEngine() throws {
+    /// `graphQueue` only. Idempotent, and safe on a source that never started.
+    private func teardown() {
+        // Cleared first, before anything that can take time. That ordering is the re-entrancy
+        // guard: a configuration change arriving while the graph is being rebuilt sees
+        // `engine == nil` and returns instead of mutating a bus somebody else is mutating.
+        let engine = self.engine
+        self.engine = nil
+
+        if let configurationObserver {
+            NotificationCenter.default.removeObserver(configurationObserver)
+            self.configurationObserver = nil
+        }
+
+        if let engine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
+
+        publish(sink: nil, converter: nil, output: nil, tapFormat: nil)
+    }
+
+    /// `graphQueue` only. Builds a whole new engine; never adds to a live one.
+    private func buildGraph(into sink: any AudioSink) throws {
+        teardown()
+
+        let engine = AVAudioEngine()
+        // Held before anything below can fail, so the caller's `teardown` finds it. A
+        // half-built graph nobody owns is how a tap outlives the code that installed it.
+        self.engine = engine
+
         let input = engine.inputNode
         let inputFormat = input.outputFormat(forBus: 0)
 
-        guard inputFormat.sampleRate > 0 else {
+        // Both axes. A device midway through disappearing reports `0 ch, 0 Hz`, but it can
+        // also report a plausible rate with no channels, which the rate check alone waves
+        // through into a converter that cannot be built from it.
+        guard inputFormat.sampleRate > 0, inputFormat.channelCount > 0 else {
             throw CaptureError.engineFailed("el dispositivo de entrada no reporta un formato válido")
         }
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
@@ -97,24 +172,42 @@ public final class MicrophoneSource: AudioSource, @unchecked Sendable {
             throw CaptureError.unsupportedFormat("no se pudo reservar el buffer de conversión")
         }
 
-        self.converter = converter
-        self.outputBuffer = outputBuffer
+        publish(
+            sink: sink, converter: converter, output: outputBuffer, tapFormat: inputFormat
+        )
 
-        input.installTap(onBus: 0, bufferSize: tapFrames, format: inputFormat) {
-            [weak self] buffer, time in
-            self?.handle(buffer: buffer, time: time)
+        // The one call here that raises rather than throws. Wrapped, and wrapped alone: on the
+        // way out `teardown` drops this engine, so nothing goes on using an object that just
+        // asserted. The format is the one read from this engine moments ago — a value the
+        // node itself has not had time to disagree with.
+        try ObjCException.catching {
+            input.installTap(onBus: 0, bufferSize: tapFrames, format: inputFormat) {
+                [weak self] buffer, time in
+                self?.handle(buffer: buffer, time: time)
+            }
         }
 
         engine.prepare()
         do {
             try engine.start()
         } catch {
-            input.removeTap(onBus: 0)
             throw CaptureError.engineFailed(error.localizedDescription)
         }
 
+        observeConfigurationChanges(on: engine)
+    }
+
+    private func publish(
+        sink: (any AudioSink)?,
+        converter: AVAudioConverter?,
+        output: AVAudioPCMBuffer?,
+        tapFormat: AVAudioFormat?
+    ) {
         lock.lock()
-        isRunning = true
+        self.sink = sink
+        self.converter = converter
+        outputBuffer = output
+        self.tapFormat = tapFormat
         lock.unlock()
     }
 
@@ -122,10 +215,17 @@ public final class MicrophoneSource: AudioSource, @unchecked Sendable {
         lock.lock()
         let sink = self.sink
         let converter = self.converter
-        let output = self.outputBuffer
+        let output = outputBuffer
+        let expected = tapFormat
         lock.unlock()
 
         guard let sink, let converter, let output, buffer.frameLength > 0 else { return }
+        // A buffer arriving in a format the converter was not built for resamples by the
+        // wrong ratio, and the result is a recording that plays back at the wrong speed —
+        // the same silent failure `CoreAudioProperties.clocked` exists to prevent on the
+        // other track. Comparing two formats reads their stream descriptions and allocates
+        // nothing, so it is affordable even here.
+        guard let expected, buffer.format == expected else { return }
         guard converter.convertOnce(from: buffer, into: output),
               let channel = output.floatChannelData?[0]
         else { return }
@@ -144,34 +244,61 @@ public final class MicrophoneSource: AudioSource, @unchecked Sendable {
     /// Unplugging headphones or switching interfaces invalidates the tap, and `AVAudioEngine`
     /// stops delivering. Rebuilding rather than stopping means a mid-class device change
     /// costs a fraction of a second instead of the rest of the recording.
-    private func observeConfigurationChanges() {
-        guard configurationObserver == nil else { return }
+    ///
+    /// `graphQueue` only, and registered per engine: the observer is filtered on the engine
+    /// it belongs to, and this process runs a second `AVAudioEngine` for playback.
+    private func observeConfigurationChanges(on engine: AVAudioEngine) {
         configurationObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine,
             queue: nil
         ) { [weak self] _ in
-            self?.handleConfigurationChange()
+            guard let self else { return }
+            // `async`, never `sync`. The notification arrives on an AVFAudio thread, and
+            // making that thread wait behind a `stop()` already queued here would block
+            // CoreAudio for as long as tearing the graph down takes. Holding `self` strongly
+            // across the hop only delays deallocation until the block has run, which is
+            // exactly what we want of a rebuild already in flight.
+            graphQueue.async { self.rebuild() }
         }
     }
 
-    private func handleConfigurationChange() {
+    /// Names the input the way the system track names its output, so a device storm reads as
+    /// one story in the manifest instead of two halves written in different languages.
+    ///
+    /// Worth the extra call: the previous wording said only that something had been
+    /// reconfigured, which is exactly the sentence that made the last post-mortem harder than
+    /// it needed to be.
+    private func describeInput() -> String {
+        guard engine?.inputNode.outputFormat(forBus: 0).sampleRate ?? 0 > 0 else {
+            return "dispositivo de entrada desconectado"
+        }
+        guard let device = try? CoreAudioProperties.defaultInputDeviceID(),
+              device != AudioObjectID(kAudioObjectUnknown)
+        else {
+            return "entrada de audio reconfigurada"
+        }
+        return "entrada cambiada a \(CoreAudioProperties.deviceName(device))"
+    }
+
+    /// `graphQueue` only.
+    private func rebuild() {
+        // Nothing to rebuild if the graph is already gone: stopped, or mid-rebuild by the
+        // block ahead of this one. This is the guard that the old `isRunning` flag could not
+        // provide, because nothing ever cleared it.
+        guard engine != nil else { return }
+
         lock.lock()
-        let shouldRestart = isRunning
+        let sink = self.sink
         lock.unlock()
-        guard shouldRestart else { return }
+        guard let sink else { return }
 
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-
-        let name = engine.inputNode.outputFormat(forBus: 0).sampleRate > 0
-            ? "entrada de audio reconfigurada"
-            : "dispositivo de entrada desconectado"
-        onDeviceChange?(name)
+        onDeviceChange?(describeInput())
 
         do {
-            try startEngine()
+            try buildGraph(into: sink)
         } catch {
+            teardown()
             onDeviceChange?("no se pudo reanudar el micrófono: \(error.localizedDescription)")
         }
     }

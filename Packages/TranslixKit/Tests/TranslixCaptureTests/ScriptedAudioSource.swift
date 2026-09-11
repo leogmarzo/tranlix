@@ -17,11 +17,34 @@ final class ScriptedAudioSource: AudioSource, @unchecked Sendable {
     private let lock = NSLock()
     private var sink: (any AudioSink)?
 
+    /// Starts that succeeded.
     private(set) var startCount = 0
+    /// Starts that were attempted, successful or not.
+    ///
+    /// Separate from `startCount` because the two answer different questions, and the
+    /// interesting one about a track that cannot be revived is "did anything keep trying?" —
+    /// which a counter that only moves on success cannot answer.
+    private(set) var startAttempts = 0
     private(set) var stopCount = 0
 
     /// Set to make `start` fail, standing in for a denied permission or a missing device.
-    var startError: (any Error)?
+    ///
+    /// Guarded, because the tests that matter set it in the middle of a session, from a
+    /// different thread than the coordinator reads it on.
+    var startError: (any Error)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return scriptedStartError
+        }
+        set {
+            lock.lock()
+            scriptedStartError = newValue
+            lock.unlock()
+        }
+    }
+
+    private var scriptedStartError: (any Error)?
 
     init(track: AudioTrack) {
         self.track = track
@@ -34,7 +57,13 @@ final class ScriptedAudioSource: AudioSource, @unchecked Sendable {
     }
 
     func start(into sink: any AudioSink) throws {
-        if let startError { throw startError }
+        lock.lock()
+        startAttempts += 1
+        let failure = scriptedStartError
+        lock.unlock()
+
+        if let failure { throw failure }
+
         lock.lock()
         self.sink = sink
         startCount += 1
