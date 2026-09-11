@@ -7,6 +7,12 @@ import TranslixModel
 /// the local diarizer — which is free, already installed, and runs at roughly a hundred times
 /// real time. Transcription is the part that was melting laptops, and the part worth paying
 /// somebody else to do.
+///
+/// Their inference endpoint is synchronous: there is no job to poll and no id to come back
+/// to, so one request has to cover upload, queue, inference and download. That shape is why
+/// `maxUploadSeconds` exists here. On 2026-09-10 a twenty-four-minute track uploaded cleanly
+/// in under eight seconds and then drew **no response at all** for nine hundred — and because
+/// the whole track was one request, the whole session was lost with it.
 public actor DeepInfraEngine: TrackTranscribing {
     public nonisolated let id = EngineID.deepInfra
     public nonisolated let displayName = "DeepInfra (Whisper large-v3)"
@@ -24,21 +30,52 @@ public actor DeepInfraEngine: TrackTranscribing {
 
     public static let defaultBaseURL = URL(string: "https://api.deepinfra.com")!
 
+    /// Ten minutes of audio per request, about 2.4 MB at the archiver's bitrate.
+    ///
+    /// Short enough that losing one costs ten minutes rather than a meeting, long enough that
+    /// an hour-long session is six requests per track rather than twelve. It also bounds the
+    /// job on their side, which matters more than it looks: word-level alignment over
+    /// twenty-four minutes is a long serial piece of work, and the failure it produced was a
+    /// handler that never finished rather than a network that broke.
+    public static let defaultMaxUploadSeconds: Double = 600
+
+    /// Four minutes without a byte from them.
+    ///
+    /// `timeoutInterval` is an inactivity timer, not a budget for the whole run, so it wants
+    /// to be proportionate to how long one batch could plausibly take to think about — a few
+    /// seconds to send and a minute or two to transcribe. Four minutes of total silence is
+    /// already anomalous, and three attempts of it still bounds a batch at twelve minutes
+    /// while leaving every other batch untouched.
+    public static let defaultRequestTimeout: TimeInterval = 240
+
+    public nonisolated let maxUploadSeconds: Double?
+
     private let apiKey: @Sendable () -> String?
     private let model: String
     private let baseURL: URL
     private let session: URLSession
+    private let requestTimeout: TimeInterval
+    private let maxAttempts: Int
+    private let retryDelay: @Sendable (Int) -> Duration
 
     public init(
         apiKey: @escaping @Sendable () -> String?,
         model: String = DeepInfraEngine.defaultModel,
         baseURL: URL = DeepInfraEngine.defaultBaseURL,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        maxUploadSeconds: Double = DeepInfraEngine.defaultMaxUploadSeconds,
+        requestTimeout: TimeInterval = DeepInfraEngine.defaultRequestTimeout,
+        maxAttempts: Int = RemoteRetry.maxAttempts,
+        retryDelay: @escaping @Sendable (Int) -> Duration = RemoteRetry.backoff
     ) {
         self.apiKey = apiKey
         self.model = model
         self.baseURL = baseURL
         self.session = session
+        self.maxUploadSeconds = maxUploadSeconds
+        self.requestTimeout = requestTimeout
+        self.maxAttempts = maxAttempts
+        self.retryDelay = retryDelay
     }
 
     static let missingKeyMessage =
@@ -79,25 +116,12 @@ public actor DeepInfraEngine: TrackTranscribing {
             throw TranscriptionError.audioUnreadable(trackFile)
         }
 
-        progress(.uploading(0))
-
-        var request = URLRequest(
-            url: baseURL.appending(path: "v1/inference/\(model)")
-        )
-        request.httpMethod = "POST"
-        // Their own examples spell it lowercase; the header name is case-insensitive but the
-        // scheme token is what their gateway matches on.
-        request.setValue("bearer \(key)", forHTTPHeaderField: "Authorization")
-        // One request carries the whole track, so the default minute is nowhere near enough
-        // for an hour of audio on a domestic uplink.
-        request.timeoutInterval = 900
-
         let body = MultipartBody()
         body.appendFile(
             named: "audio",
             fileName: trackFile.lastPathComponent,
             contentType: "audio/m4a",
-            data: try Data(contentsOf: trackFile, options: .mappedIfSafe)
+            at: trackFile
         )
         // Word-level timings, which is what lets the local diarizer cut a segment where the
         // voice changes rather than attributing the whole thing to one person.
@@ -107,42 +131,35 @@ public actor DeepInfraEngine: TrackTranscribing {
         if let code = language.whisperLanguageCode {
             body.appendField(named: "language", value: code)
         }
-        request.setValue(body.contentType, forHTTPHeaderField: "Content-Type")
-        request.httpBody = body.finished()
 
-        progress(.waiting)
+        // Assembled on disk once and uploaded from there on every attempt. The audio is never
+        // held in memory, and a retry re-sends the same bytes instead of rebuilding them.
+        let envelope = URL(filePath: NSTemporaryDirectory())
+            .appending(path: "translix-deepinfra-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: envelope) }
+        try body.write(to: envelope)
 
-        let data: Data
-        let response: URLResponse
-        do {
-            (data, response) = try await session.data(for: request)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw TranscriptionError.engineFailed(error.localizedDescription)
-        }
-
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200 ..< 300).contains(status) else {
-            if status == 401 || status == 403 {
-                throw TranscriptionError.modelUnavailable(Self.rejectedKeyMessage)
-            }
-            let detail = String(data: data.prefix(300), encoding: .utf8) ?? "sin detalle"
-            throw TranscriptionError.engineFailed("DeepInfra respondió \(status): \(detail)")
-        }
+        progress(.uploading(0))
 
         let decoded: DeepInfraTranscription
         do {
-            decoded = try JSONDecoder().decode(DeepInfraTranscription.self, from: data)
-        } catch {
-            // The body goes in the message. A decoding error on its own names a missing key
-            // and nothing about what actually arrived, which is a diagnosis nobody can make
-            // from the error alone — this one cost a round trip to work out.
-            let body = String(data: data.prefix(400), encoding: .utf8) ?? "(ilegible)"
-            throw TranscriptionError.engineFailed(
-                "No se pudo leer la respuesta de DeepInfra: \(error.localizedDescription). "
-                    + "Respondió: \(body)"
-            )
+            decoded = try await RemoteRetry.perform(
+                maxAttempts: maxAttempts,
+                delay: retryDelay,
+                reportingRetry: { attempt, total in
+                    progress(.retrying(attempt: attempt, of: total))
+                }
+            ) { attempt in
+                try await self.send(
+                    envelope: envelope,
+                    contentType: body.contentType,
+                    key: key,
+                    attempt: attempt,
+                    progress: progress
+                )
+            }
+        } catch let exhausted as RemoteRetry.Exhausted {
+            throw Self.error(for: exhausted)
         }
 
         return TrackTranscription(
@@ -151,6 +168,114 @@ public actor DeepInfraEngine: TrackTranscribing {
             turns: [],
             detectedLanguage: language == .automatic ? decoded.language : nil
         )
+    }
+
+    private func send(
+        envelope: URL,
+        contentType: String,
+        key: String,
+        attempt: Int,
+        progress: @escaping @Sendable (TrackTranscriptionPhase) -> Void
+    ) async throws -> DeepInfraTranscription {
+        var request = URLRequest(url: baseURL.appending(path: "v1/inference/\(model)"))
+        request.httpMethod = "POST"
+        // Their own examples spell it lowercase; the header name is case-insensitive but the
+        // scheme token is what their gateway matches on.
+        request.setValue("bearer \(key)", forHTTPHeaderField: "Authorization")
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = requestTimeout
+
+        let delegate = UploadProgressDelegate { fraction in
+            // A later attempt has already reported `.retrying`, and reporting upload
+            // fractions again from there would walk the progress bar backwards. Only the
+            // moment the body is fully out is worth saying twice.
+            if fraction >= 1 {
+                progress(.waiting)
+            } else if attempt == 1 {
+                progress(.uploading(fraction))
+            }
+        }
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.upload(
+                for: request, fromFile: envelope, delegate: delegate
+            )
+        } catch {
+            throw RemoteRetry.classify(error, bodyFullySent: delegate.bodyFullySent)
+        }
+
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200 ..< 300).contains(status) else {
+            if status == 401 || status == 403 {
+                // Thrown past the retry policy on purpose: a key they have already refused is
+                // not going to be accepted on the second upload, and the advice is specific.
+                throw TranscriptionError.modelUnavailable(Self.rejectedKeyMessage)
+            }
+            let detail = String(data: data.prefix(300), encoding: .utf8) ?? "sin detalle"
+            throw RemoteFailure.status(status, detail: detail)
+        }
+
+        do {
+            return try JSONDecoder().decode(DeepInfraTranscription.self, from: data)
+        } catch {
+            // The body goes in the message. A decoding error on its own names a missing key
+            // and nothing about what actually arrived, which is a diagnosis nobody can make
+            // from the error alone — this one cost a round trip to work out.
+            let body = String(data: data.prefix(400), encoding: .utf8) ?? "(ilegible)"
+            throw RemoteFailure.undecodable(detail: error.localizedDescription, body: body)
+        }
+    }
+
+    /// Says what actually went wrong, in the terms someone deciding what to do next needs.
+    ///
+    /// The old version passed `error.localizedDescription` straight through, which on a
+    /// Spanish system turned the worst failure this engine has into "Se ha agotado el tiempo
+    /// de espera." — true, and useless. Whether the audio arrived is the fact that separates a
+    /// server problem from a connection problem, and it is worth a sentence.
+    static func error(for exhausted: RemoteRetry.Exhausted) -> TranscriptionError {
+        let tries = exhausted.attempts == 1 ? "1 intento" : "\(exhausted.attempts) intentos"
+        let seconds = exhausted.elapsedSeconds
+
+        switch exhausted.failure {
+        case let .transport(error, bodyFullySent):
+            switch error.code {
+            case .notConnectedToInternet:
+                return .engineFailed(
+                    "No hay conexión a internet. Reintentá cuando vuelva."
+                )
+            case .timedOut where bodyFullySent:
+                return .engineFailed("""
+                DeepInfra recibió el audio y no contestó nada en \(seconds) s, en \(tries).
+                """)
+            default:
+                return .engineFailed("""
+                Se cortó la conexión con DeepInfra a los \(seconds) s, en \(tries): \
+                \(error.localizedDescription)
+                """)
+            }
+
+        case let .status(status, detail):
+            switch status {
+            case 429:
+                return .engineFailed("""
+                DeepInfra está saturado (429) y no aflojó en \(tries). \
+                Probá de nuevo en unos minutos.
+                """)
+            case 413:
+                return .engineFailed("""
+                DeepInfra rechazó el audio por tamaño (413). Hay que mandar bloques más cortos.
+                """)
+            default:
+                return .engineFailed("DeepInfra respondió \(status): \(detail)")
+            }
+
+        case let .undecodable(detail, body):
+            return .engineFailed(
+                "No se pudo leer la respuesta de DeepInfra: \(detail). Respondió: \(body)"
+            )
+        }
     }
 
     /// A chunk is just a short track file, so it rides the same path.
@@ -168,35 +293,57 @@ public actor DeepInfraEngine: TrackTranscribing {
     }
 }
 
-/// Assembles a `multipart/form-data` body.
+/// Assembles a `multipart/form-data` body on disk.
 ///
-/// Written by hand rather than pulled in as a dependency: it is thirty lines, and the audio
-/// is appended as raw bytes so an hour-long track is copied once rather than base64-expanded.
+/// Written by hand rather than pulled in as a dependency: it is sixty lines, and the audio is
+/// copied straight from its file into the envelope rather than being read into memory and
+/// then copied again to close the body.
 final class MultipartBody {
     private let boundary = "translix-\(UUID().uuidString)"
-    private var data = Data()
+    private var fields = Data()
+    private var fileHeader: Data?
+    private var fileURL: URL?
 
     var contentType: String { "multipart/form-data; boundary=\(boundary)" }
 
     func appendField(named name: String, value: String) {
-        data.append(Data("--\(boundary)\r\n".utf8))
-        data.append(Data("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".utf8))
-        data.append(Data("\(value)\r\n".utf8))
+        fields.append(Data("--\(boundary)\r\n".utf8))
+        fields.append(Data("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".utf8))
+        fields.append(Data("\(value)\r\n".utf8))
     }
 
-    func appendFile(named name: String, fileName: String, contentType: String, data payload: Data) {
-        data.append(Data("--\(boundary)\r\n".utf8))
-        data.append(Data(
+    /// Records a file to be copied into the body. The file is not read until `write(to:)`.
+    func appendFile(named name: String, fileName: String, contentType: String, at url: URL) {
+        var header = Data()
+        header.append(Data("--\(boundary)\r\n".utf8))
+        header.append(Data(
             "Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(fileName)\"\r\n".utf8
         ))
-        data.append(Data("Content-Type: \(contentType)\r\n\r\n".utf8))
-        data.append(payload)
-        data.append(Data("\r\n".utf8))
+        header.append(Data("Content-Type: \(contentType)\r\n\r\n".utf8))
+        fileHeader = header
+        fileURL = url
     }
 
-    func finished() -> Data {
-        var body = data
-        body.append(Data("--\(boundary)--\r\n".utf8))
-        return body
+    /// Streams the assembled body to `destination`.
+    func write(to destination: URL) throws {
+        try? FileManager.default.removeItem(at: destination)
+        guard FileManager.default.createFile(atPath: destination.path, contents: nil) else {
+            throw TranscriptionError.audioUnreadable(destination)
+        }
+        let output = try FileHandle(forWritingTo: destination)
+        defer { try? output.close() }
+
+        if let fileHeader, let fileURL {
+            try output.write(contentsOf: fileHeader)
+            let input = try FileHandle(forReadingFrom: fileURL)
+            defer { try? input.close() }
+            while let block = try input.read(upToCount: 1 << 20), !block.isEmpty {
+                try output.write(contentsOf: block)
+            }
+            try output.write(contentsOf: Data("\r\n".utf8))
+        }
+
+        try output.write(contentsOf: fields)
+        try output.write(contentsOf: Data("--\(boundary)--\r\n".utf8))
     }
 }

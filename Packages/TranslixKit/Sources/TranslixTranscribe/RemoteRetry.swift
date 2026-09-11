@@ -9,7 +9,7 @@ import Foundation
 /// on a Spanish system `-1001` renders as "Se ha agotado el tiempo de espera." — a sentence
 /// that names neither the service, nor how long it waited, nor whether the audio ever
 /// arrived.
-enum RemoteFailure: Error {
+public enum RemoteFailure: Error {
     /// The request never produced an HTTP response.
     ///
     /// `bodyFullySent` is what separates "the server took the audio and said nothing" from
@@ -25,15 +25,15 @@ enum RemoteFailure: Error {
 }
 
 /// When to send a remote request again, and when a second attempt is just a second bill.
-enum RemoteRetry {
+public enum RemoteRetry {
     /// Three attempts. Past that the failure is not transient, and a fourth upload of the
     /// same audio buys the same answer at the same price.
-    static let maxAttempts = 3
+    public static let maxAttempts = 3
 
     /// Doubling from four seconds. The whole ladder is twelve seconds — long enough to ride
     /// out a gateway hiccup, short enough that somebody watching the progress strip does not
     /// conclude the app has died.
-    static func backoff(afterAttempt attempt: Int) -> Duration {
+    public static func backoff(afterAttempt attempt: Int) -> Duration {
         .seconds(4 << max(0, attempt - 1))
     }
 
@@ -43,7 +43,7 @@ enum RemoteRetry {
     /// is billed again, so anything the server has already judged — a bad request, a rejected
     /// key, a payload it will not accept — is final. Only silence, a broken connection, and
     /// the server saying "not now" are worth repeating.
-    static func isTransient(_ failure: RemoteFailure) -> Bool {
+    public static func isTransient(_ failure: RemoteFailure) -> Bool {
         switch failure {
         case let .transport(error, _):
             switch error.code {
@@ -63,13 +63,13 @@ enum RemoteRetry {
     }
 
     /// A request that ran out of attempts, with what the message needs to say so.
-    struct Exhausted: Error {
-        let failure: RemoteFailure
-        let attempts: Int
-        let elapsed: Duration
+    public struct Exhausted: Error {
+        public let failure: RemoteFailure
+        public let attempts: Int
+        public let elapsed: Duration
 
         /// Whole seconds, which is the only precision worth showing a person.
-        var elapsedSeconds: Int {
+        public var elapsedSeconds: Int {
             Int(elapsed.components.seconds)
         }
     }
@@ -80,7 +80,7 @@ enum RemoteRetry {
     /// `URLSession.data(for:)` reports a cancelled surrounding task as `URLError(.cancelled)`,
     /// not `CancellationError`, so a `catch is CancellationError` never fired and cancelling a
     /// run marked the session **failed** instead of putting it back the way it was.
-    static func classify(_ error: any Error, bodyFullySent: Bool) -> any Error {
+    public static func classify(_ error: any Error, bodyFullySent: Bool) -> any Error {
         if error is CancellationError { return CancellationError() }
         if let url = error as? URLError {
             if url.code == .cancelled { return CancellationError() }
@@ -98,10 +98,14 @@ enum RemoteRetry {
     /// Only `RemoteFailure` is considered for a retry. Anything else — a missing key, a
     /// rejected key, a cancellation — travels straight out, which is what keeps a wrong
     /// credential from being uploaded against three times.
-    static func perform<T: Sendable>(
+    public static func perform<T>(
         maxAttempts: Int = RemoteRetry.maxAttempts,
         delay: @Sendable (Int) -> Duration = RemoteRetry.backoff,
         reportingRetry: @Sendable (_ attempt: Int, _ of: Int) -> Void = { _, _ in },
+        // Runs in the caller's isolation rather than hopping out of it, so an engine actor
+        // can hand over a closure that touches its own state without it having to be
+        // `Sendable`. The retry loop owns no state of its own; only the caller's.
+        isolation: isolated (any Actor)? = #isolation,
         _ body: (_ attempt: Int) async throws -> T
     ) async throws -> T {
         let attempts = max(1, maxAttempts)
