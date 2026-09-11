@@ -174,6 +174,13 @@ public struct TrackTranscription: Sendable, Equatable {
 public enum TrackTranscriptionPhase: Sendable, Equatable {
     case uploading(Double)
     case waiting
+
+    /// The request is being sent again after a transient failure.
+    ///
+    /// Reported instead of a second `uploading(0)`, and that is deliberate: the strip's
+    /// fractions must never go backwards, and an engine that cannot rewind is a stronger
+    /// guarantee than a pipeline that remembers to clamp.
+    case retrying(attempt: Int, of: Int)
 }
 
 /// An engine that transcribes a whole track in one call.
@@ -192,10 +199,34 @@ public protocol TrackTranscribing: TranscriptionEngine {
     /// leave every line of a meeting unattributed.
     nonisolated var separatesSpeakers: Bool { get }
 
+    /// The longest stretch of audio this engine should be handed in one request, in seconds.
+    ///
+    /// `nil` means the whole track, however long it is. That is only the right answer when
+    /// the engine's output depends on hearing all of it: AssemblyAI clusters speaker identity
+    /// over the entire recording, and identity cannot be stitched across separate requests.
+    ///
+    /// A finite value is what makes a long session survivable. The pipeline cuts the track
+    /// into batches no longer than this and files each one the moment it lands, so a server
+    /// that goes quiet costs one batch rather than the session — which is not hypothetical:
+    /// a twenty-four-minute recording was lost whole when DeepInfra took the upload and then
+    /// sent nothing at all for fifteen minutes. It also bounds what the server is asked to do
+    /// in one go, and a Whisper host asked for word-level alignment over twenty-four minutes
+    /// has a long serial job in front of it.
+    ///
+    /// Deliberately not derived from `separatesSpeakers`, which happens to select correctly
+    /// today. That property is a statement about the shape of the *result*, and an engine
+    /// that gained speaker labels tomorrow would silently lose batching.
+    nonisolated var maxUploadSeconds: Double? { get }
+
     func transcribe(
         trackFile: URL,
         track: AudioTrack,
         language: TranscriptionLanguage,
         progress: @escaping @Sendable (TrackTranscriptionPhase) -> Void
     ) async throws -> TrackTranscription
+}
+
+public extension TrackTranscribing {
+    /// Whole tracks, which is what every engine did before batching existed.
+    nonisolated var maxUploadSeconds: Double? { nil }
 }

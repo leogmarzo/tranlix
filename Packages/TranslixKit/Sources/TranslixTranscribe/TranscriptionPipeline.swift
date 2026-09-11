@@ -327,7 +327,7 @@ public actor TranscriptionPipeline {
                     switch phase {
                     case let .uploading(fraction):
                         progress(.uploading(track: track, fraction: (done + 0.6 * fraction) / total))
-                    case .waiting:
+                    case .waiting, .retrying:
                         progress(.waitingRemote(fraction: (done + 0.8) / total))
                     }
                 }
