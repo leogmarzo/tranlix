@@ -29,6 +29,15 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
     private let pendingLock = NSLock()
     private var pendingChunks: [ChunkRef] = []
 
+    /// Every chunk this recorder has ever closed, in order.
+    ///
+    /// Kept alongside the pending queue rather than derived from it, because
+    /// `takePendingChunks` empties that queue and more than one caller reads it: a flush
+    /// spawned by a chunk closing can drain it moments before `stop` goes looking. This list
+    /// is never emptied, so whoever ends the recording can hand the manifest the whole thing
+    /// regardless of who else has been reading.
+    private var closedChunks: [ChunkRef] = []
+
     /// Host time of the first frame ever delivered, as a `Double` bit pattern.
     ///
     /// Written from the audio thread — a plain atomic store, which is real-time safe — and
@@ -42,6 +51,15 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
     /// position every frame of animation without taking a hop onto the writer queue, which
     /// would stall behind a disk write.
     private let writtenFrames = Atomic<Int64>(0)
+
+    /// Frames the capture backend has handed over, whether or not the writer has caught up.
+    ///
+    /// Separate from `writtenFrames` because the two answer different questions and only one
+    /// of them is about the microphone. `writtenFrames` moves on the writer queue, which runs
+    /// at utility priority and is the first thing the system starves when the machine is
+    /// busy; a recorder can go most of a second without it moving while audio keeps arriving
+    /// perfectly well. Anything asking "is this source still delivering?" has to read this one.
+    private let acceptedFrames = Atomic<Int64>(0)
 
     /// While set, incoming audio is discarded instead of recorded.
     ///
@@ -108,6 +126,7 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
             ordering: .relaxed
         )
         ring.write(samples, count: frameCount)
+        acceptedFrames.add(Int64(frameCount), ordering: .relaxed)
     }
 
     // MARK: - Writer queue
@@ -175,6 +194,13 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
 
     var isPaused: Bool { paused.load(ordering: .relaxed) }
 
+    /// Every chunk closed so far, without consuming anything. Safe from any thread.
+    var allClosedChunks: [ChunkRef] {
+        pendingLock.lock()
+        defer { pendingLock.unlock() }
+        return closedChunks
+    }
+
     /// Hands over every chunk closed since the last call. Safe from any thread.
     func takePendingChunks() -> [ChunkRef] {
         pendingLock.lock()
@@ -187,6 +213,7 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
     private func enqueue(_ chunk: ChunkRef) {
         pendingLock.lock()
         pendingChunks.append(chunk)
+        closedChunks.append(chunk)
         pendingLock.unlock()
         onChunkClosed?()
     }
@@ -254,5 +281,14 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
     /// has to do to keep pointing at the right moment of the file.
     var totalFrames: Int64 {
         writtenFrames.load(ordering: .relaxed)
+    }
+
+    /// Frames accepted from the capture backend, before the writer queue has seen them.
+    ///
+    /// The liveness signal. Never use it for anything the user sees: it counts audio that is
+    /// on its way to the disk, not audio that is on the disk, and the gap between the two is
+    /// exactly what the manifest must not lie about.
+    var receivedFrames: Int64 {
+        acceptedFrames.load(ordering: .relaxed)
     }
 }
