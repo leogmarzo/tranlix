@@ -295,7 +295,7 @@ public actor RecordingCoordinator {
 
         let offset = await elapsed()
         for recorder in recorders.values { recorder.pause() }
-        for track in AudioTrack.allCases { await flushTrack(track) }
+        for track in AudioTrack.allCases { await flushEverything(track) }
 
         // Written after the flush so the offset it carries is one the manifest can already
         // account for in chunks.
@@ -326,6 +326,40 @@ public actor RecordingCoordinator {
             try? await handle.recordFirstBuffer(hostTime: hostTime, for: track)
         }
         for chunk in recorder.takePendingChunks() {
+            do {
+                try await handle.appendChunk(chunk, to: track)
+            } catch {
+                emit(.writeFailed(track, error.localizedDescription))
+            }
+        }
+    }
+
+    /// Brings the manifest level with everything a track has closed, not only what is pending.
+    ///
+    /// Used wherever the app promises that the manifest is complete — ending a recording, and
+    /// pausing one — and the difference from `flushTrack` is the whole point. `flushTrack`
+    /// also runs from `onChunkClosed`, in a task nothing holds, and it *consumes* the pending
+    /// queue. So an in-flight flush can have taken the last chunk out of the queue and not yet
+    /// written it at the instant `stop` or `pause` goes looking, leaving them to return
+    /// against a manifest that under-reports the recording. Both of them document that they
+    /// never do that. Reproducible under load: two chunk files on disk, one of them in the
+    /// manifest, and the second arriving a few hundred milliseconds after `stop` had returned.
+    ///
+    /// Reading the recorder's own record closes the gap, and comparing against what the
+    /// manifest already knows keeps the cost at whatever is genuinely missing — normally
+    /// nothing, which matters because pausing an hour-long session must not rewrite every
+    /// chunk it has ever recorded.
+    private func flushEverything(_ track: AudioTrack) async {
+        guard let handle, let recorder = recorders[track] else { return }
+
+        if let hostTime = recorder.firstBufferHostTime {
+            try? await handle.recordFirstBuffer(hostTime: hostTime, for: track)
+        }
+        _ = recorder.takePendingChunks()
+
+        // Closed chunks never change afterwards, so knowing the index is knowing the chunk.
+        let known = Set(await handle.manifest.track(track).chunks.map(\.index))
+        for chunk in recorder.allClosedChunks where !known.contains(chunk.index) {
             do {
                 try await handle.appendChunk(chunk, to: track)
             } catch {
@@ -403,7 +437,13 @@ public actor RecordingCoordinator {
 
         for track in AudioTrack.allCases {
             guard let recorder = recorders[track] else { continue }
-            let frames = recorder.totalFrames
+            // Frames received, not frames written. The writer queue runs at utility priority
+            // and is among the first things the system starves when the machine is busy, so
+            // the written count can sit still for most of a second while the microphone is
+            // delivering perfectly well. Reading that as a dead track tears down and rebuilds
+            // an audio graph because the disk was briefly behind — which is both the wrong
+            // response and, until recently, a way to crash.
+            let frames = recorder.receivedFrames
             let previous = lastObservedFrames[track]
             lastObservedFrames[track] = frames
 
@@ -553,12 +593,12 @@ public actor RecordingCoordinator {
         isRecording = false
         isPaused = false
 
-        // Each recorder drains synchronously, so once this returns everything that reached
-        // the disk is sitting in the pending queues.
+        // Each recorder drains synchronously, so once this returns every sample that reached
+        // the disk has been closed into a chunk the recorder knows about.
         await cleanUp()
 
         for track in AudioTrack.allCases {
-            await flushTrack(track)
+            await flushEverything(track)
         }
         for (track, recorder) in recorders where recorder.droppedFrames > 0 {
             emit(.droppedFrames(track, recorder.droppedFrames))
@@ -581,7 +621,7 @@ public actor RecordingCoordinator {
         isPaused = false
         await cleanUp()
         for track in AudioTrack.allCases {
-            await flushTrack(track)
+            await flushEverything(track)
         }
         recorders.removeAll()
         sources.removeAll()

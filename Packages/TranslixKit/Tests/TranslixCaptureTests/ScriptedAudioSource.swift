@@ -95,6 +95,65 @@ final class ScriptedAudioSource: AudioSource, @unchecked Sendable {
     }
 }
 
+/// Feeds one or more scripted sources from a dispatch queue for as long as it is alive.
+///
+/// The queue is the point. A test that emits inside its own `async` body is driving audio
+/// from the cooperative thread pool, and the suite saturates that pool: a loop meant to emit
+/// every ten milliseconds can be starved for a hundred, at which point the track really has
+/// stopped delivering and the coordinator is right to restart it. A test asserting that a
+/// healthy track is left alone then fails for being wrong about its own premise.
+///
+/// A dispatch queue keeps feeding while the pool is busy elsewhere, which is also how the
+/// real backends behave — audio arrives on its own thread, not on whatever the app is doing.
+final class ContinuousEmitter: @unchecked Sendable {
+    private let timer: DispatchSourceTimer
+    private let lock = NSLock()
+    private var stopped = false
+
+    /// - Parameters:
+    ///   - sources: fed in order on every tick.
+    ///   - framesPerTick: paired with `interval` to run at roughly real time, so a test that
+    ///     waits for a second of audio waits about a second and the numbers it asserts on
+    ///     mean what they say.
+    ///   - interval: how often to feed.
+    ///   - hostTime: the first buffer's host time; each tick advances it by its own duration.
+    init(
+        feeding sources: [ScriptedAudioSource],
+        framesPerTick: Int = 80,
+        interval: DispatchTimeInterval = .milliseconds(5),
+        from hostTime: TimeInterval = 100,
+        sampleRate: Double = 16000
+    ) {
+        let queue = DispatchQueue(label: "com.leomarzo.translix.tests.emitter", qos: .userInitiated)
+        timer = DispatchSource.makeTimerSource(queue: queue)
+        let step = Double(framesPerTick) / sampleRate
+        let clock = Locked(hostTime)
+
+        timer.schedule(deadline: .now(), repeating: interval)
+        timer.setEventHandler {
+            let at = clock.withValue { value -> TimeInterval in
+                let now = value
+                value += step
+                return now
+            }
+            for source in sources {
+                source.emit(frames: framesPerTick, hostTime: at)
+            }
+        }
+        timer.resume()
+    }
+
+    func stop() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !stopped else { return }
+        stopped = true
+        timer.cancel()
+    }
+
+    deinit { stop() }
+}
+
 enum CaptureTestTimeout: Error {
     case waitingForAudio(expected: TimeInterval, reached: TimeInterval)
 }
@@ -120,6 +179,26 @@ func waitForLevel(
         try await Task.sleep(for: .milliseconds(5))
     }
     throw CaptureTestTimeout.waitingForAudio(expected: 0, reached: 0)
+}
+
+/// Waits until at least `seconds` of audio have been recorded.
+///
+/// The companion to `waitForRecorded`, which wants an exact figure and is right to: a test
+/// that emits one known quantity should assert on that quantity. A test fed continuously has
+/// no exact figure to wait for, and asking for one only ever succeeds by luck.
+func waitForAtLeastRecorded(
+    _ seconds: TimeInterval,
+    on coordinator: RecordingCoordinator,
+    timeout: TimeInterval = 10
+) async throws {
+    let deadline = Date().addingTimeInterval(timeout)
+    var reached: TimeInterval = 0
+    while Date() < deadline {
+        reached = await coordinator.elapsed()
+        if reached >= seconds { return }
+        try await Task.sleep(for: .milliseconds(5))
+    }
+    throw CaptureTestTimeout.waitingForAudio(expected: seconds, reached: reached)
 }
 
 func waitForRecorded(
