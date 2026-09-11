@@ -74,6 +74,69 @@ struct MicrophoneSourceTests {
     }
 
     @Test(
+        "repeated restarts leave one engine behind, not a pile of them",
+        .enabled(if: MicrophoneSourceTests.hardwareEnabled)
+    )
+    func repeatedRestartsDoNotAccumulate() throws {
+        let source = try MicrophoneSource(sampleRate: 16000)
+        let sink = CountingSink()
+
+        // The liveness monitor restarts a stalled track every few seconds for as long as it
+        // stays stalled, so this is not an exotic path — it is what a bad afternoon looks
+        // like. A fresh engine per start is the right fix and also the change most likely to
+        // leak, if a tap block or an observer outlives the engine that owns it.
+        for _ in 0 ..< 20 {
+            try source.start(into: sink)
+            source.stop()
+        }
+        #expect(source.isCapturing == false)
+
+        try source.start(into: sink)
+        #expect(source.isCapturing)
+        source.stop()
+    }
+
+    @Test(
+        "start and stop racing each other never leaves a tap behind",
+        .enabled(if: MicrophoneSourceTests.hardwareEnabled)
+    )
+    func concurrentStartAndStopStayConsistent() throws {
+        let source = try MicrophoneSource(sampleRate: 16000)
+        let sink = CountingSink()
+
+        // This is the reproduction. Run against the version this replaced, it aborts with
+        // `required condition is false: nullptr == Tap()` — a tap installed on a bus that
+        // still had one, which is the same signature as the crash that ended a
+        // fifty-seven-minute recording. Two threads mutating bus 0 at once is exactly what
+        // the app did: the coordinator restarting a stalled track while AVFAudio's
+        // notification thread rebuilt the same graph.
+        //
+        // Note the failure mode: an Objective-C exception out of installTap kills the test
+        // process rather than failing an expectation. That is the correct and loudest way for
+        // this particular regression to announce itself.
+        let group = DispatchGroup()
+        for worker in 0 ..< 4 {
+            DispatchQueue.global().async(group: group) {
+                for _ in 0 ..< 25 {
+                    if worker.isMultiple(of: 2) {
+                        try? source.start(into: sink)
+                    } else {
+                        source.stop()
+                    }
+                }
+            }
+        }
+        #expect(group.wait(timeout: .now() + 60) == .success)
+
+        // Whatever order they finished in, the object is still usable.
+        source.stop()
+        #expect(source.isCapturing == false)
+        try source.start(into: sink)
+        #expect(source.isCapturing)
+        source.stop()
+    }
+
+    @Test(
         "the default input device can be named",
         .enabled(if: MicrophoneSourceTests.hardwareEnabled)
     )

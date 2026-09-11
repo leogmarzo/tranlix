@@ -12,16 +12,22 @@ import TranslixModel
 ///
 /// The one invariant everything here serves: **between `stop()` and `start(into:)` this
 /// object owns no engine, no tap and no observer, and every mutation of that triple happens
-/// on `graphQueue`.** An earlier version kept one engine for the life of the process and
-/// tracked an `isRunning` flag alongside it. Both cost a recording. The engine's input node
-/// caches the format it was built with, and when a device storm leaves the IO unit unable to
-/// restart, that cache disagrees with the hardware permanently — so `installTap` raised
-/// against a format that had been correct minutes earlier. Meanwhile the flag was never
-/// cleared on the rebuild path, so the object could believe it was running with no tap and a
-/// stopped engine, and its own re-entrancy guard read that lie and let a second rebuild in.
+/// on `graphQueue`.**
 ///
-/// A fresh engine per start has no cache to go stale and no bus that could already carry a
-/// tap, and `engine != nil` is the whole state, so there is no second flag to forget.
+/// An earlier version kept one engine for the life of the process, tracked an `isRunning`
+/// flag alongside it, and serialized none of it. On 2026-09-10 that aborted the app
+/// fifty-seven minutes into a recording. The mechanism is reproducible and is in the tests:
+/// racing `start` against `stop` raises `required condition is false: nullptr == Tap()` —
+/// a tap installed on a bus that already had one. It happened because `stop()` skipped
+/// `removeTap` whenever `isRunning` was false, and `isRunning` was false for the whole
+/// window between installing a tap and the engine finishing its start, as well as after any
+/// failed rebuild, since the rebuild path never cleared the flag.
+///
+/// A fresh engine per start has no bus that could already carry a tap and no cached format to
+/// go stale — the second hazard, which was never reproduced but which a long-lived engine
+/// makes possible: the input node caches the format it was built with, and a device storm can
+/// leave that cache permanently disagreeing with the hardware. `engine != nil` is now the
+/// whole state, so there is no second flag to forget to clear.
 public final class MicrophoneSource: AudioSource, @unchecked Sendable {
     public let track: AudioTrack = .mic
     public var onDeviceChange: (@Sendable (String) -> Void)?
