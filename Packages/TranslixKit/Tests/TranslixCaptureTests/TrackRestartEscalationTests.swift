@@ -82,17 +82,16 @@ struct TrackRestartEscalationTests {
         )
     }
 
-    /// Keeps one track alive while the other is left to die, so the liveness monitor has a
-    /// healthy track to contrast against and the session has a reason to keep going.
-    private func driveSystemTrack(
-        _ sources: Sources,
-        steps: Int = 40,
-        from hostTime: TimeInterval = 102
-    ) async throws {
-        for step in 0 ..< steps {
-            sources.system.emit(frames: 1600, hostTime: hostTime + Double(step) * 0.1)
-            try await Task.sleep(for: .milliseconds(10))
-        }
+    /// Keeps a track alive from a dispatch queue while the other is left to die.
+    ///
+    /// Two separate feeds rather than one loop over both, because the moment the microphone
+    /// is supposed to die has to be the test's decision and nothing else's. Driving them from
+    /// the test's own async body hands that decision to the scheduler: the suite saturates the
+    /// cooperative pool, a starved loop leaves the microphone genuinely silent, and it gets
+    /// restarted — successfully, since the error has not been set yet — before the test ever
+    /// gets to kill it. The assertion then looks for a failure that never happened.
+    private func feed(_ sources: ScriptedAudioSource...) -> ContinuousEmitter {
+        ContinuousEmitter(feeding: sources)
     }
 
     private func waitForAttempts(
@@ -110,6 +109,28 @@ struct TrackRestartEscalationTests {
         )
     }
 
+    /// Waits until the coordinator has actually given up on a track.
+    ///
+    /// A definite state, unlike a count of attempts: `waitForAttempts` returns the moment it
+    /// sees the number it wanted, which can be while the coordinator is still deciding what
+    /// that stall meant. Snapshotting the count there and asserting it stops moving is a race
+    /// against a decision already in flight.
+    private func waitForGivingUp(
+        on track: AudioTrack,
+        in events: Events,
+        timeout: TimeInterval = 5
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if events.all.contains(where: {
+                if case .captureLost(track, _) = $0 { return true }
+                return false
+            }) { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        Issue.record("\(track) was never given up on")
+    }
+
     /// Long enough for several liveness checks to have run.
     private func settle() async throws {
         try await Task.sleep(for: .milliseconds(300))
@@ -124,13 +145,16 @@ struct TrackRestartEscalationTests {
                 title: "Clase", language: .spanish, now: epoch
             )
 
-            sources.emitBoth(seconds: 2, hostTime: 100)
-            try await waitForRecorded(2, on: recorder)
+            let systemFeed = feed(sources.system)
+            defer { systemFeed.stop() }
+            let micFeed = feed(sources.mic)
+            try await waitForAtLeastRecorded(0.5, on: recorder)
 
             // The microphone dies and cannot be revived — a device that was unplugged, or a
-            // permission revoked mid-session.
+            // permission revoked mid-session. The meeting goes on, so the system track keeps
+            // delivering and the session has a reason to continue.
             sources.mic.startError = CaptureError.engineFailed("sin dispositivo de entrada")
-            try await driveSystemTrack(sources)
+            micFeed.stop()
             try await waitForAttempts(2, of: sources.mic)
 
             #expect(await recorder.isRecording)
@@ -167,17 +191,18 @@ struct TrackRestartEscalationTests {
                 title: "Clase", language: .spanish, now: epoch
             )
 
-            sources.emitBoth(seconds: 2, hostTime: 100)
-            try await waitForRecorded(2, on: recorder)
+            let systemFeed = feed(sources.system)
+            defer { systemFeed.stop() }
+            let micFeed = feed(sources.mic)
+            try await waitForAtLeastRecorded(0.5, on: recorder)
 
             sources.mic.startError = CaptureError.engineFailed("sin dispositivo de entrada")
-            try await driveSystemTrack(sources)
-            try await waitForAttempts(2, of: sources.mic)
+            micFeed.stop()
+            try await waitForGivingUp(on: .mic, in: events)
 
             // Against the previous version this is where it fails: the restart loop ran on
             // every check for the rest of the session, so the count kept climbing.
             let attemptsAtGivingUp = sources.mic.startAttempts
-            try await driveSystemTrack(sources, from: 106)
             try await settle()
             #expect(sources.mic.startAttempts == attemptsAtGivingUp)
 
@@ -217,17 +242,18 @@ struct TrackRestartEscalationTests {
                 title: "Clase", language: .spanish, now: epoch
             )
 
-            sources.emitBoth(seconds: 2, hostTime: 100)
-            try await waitForRecorded(2, on: recorder)
+            let systemFeed = feed(sources.system)
+            defer { systemFeed.stop() }
+            let micFeed = feed(sources.mic)
+            try await waitForAtLeastRecorded(0.5, on: recorder)
 
             sources.mic.startError = CaptureError.engineFailed("sin dispositivo de entrada")
-            try await driveSystemTrack(sources)
+            micFeed.stop()
             try await waitForAttempts(2, of: sources.mic)
 
             // The device comes back. Giving up meant asking less often, not never again.
             let framesBefore = await handle.manifest.track(.mic).totalFrames
             sources.mic.startError = nil
-            try await driveSystemTrack(sources, from: 106)
 
             let restartDeadline = Date().addingTimeInterval(5)
             while Date() < restartDeadline, !sources.mic.isRunning {
@@ -235,16 +261,14 @@ struct TrackRestartEscalationTests {
             }
             #expect(sources.mic.isRunning)
 
-            // Both tracks from here on, and no idle stretch anywhere: a microphone that is
+            // Fed again from here on, and with no idle stretch anywhere: a microphone that is
             // restarted and then goes quiet again is dead again, and the coordinator is right
             // to say so a second time. Proving recovery is announced exactly once means
             // actually keeping the track alive until it has been announced.
+            let micAgain = feed(sources.mic)
+            defer { micAgain.stop() }
             let deadline = Date().addingTimeInterval(5)
-            var step = 0
             while Date() < deadline, !events.all.contains(.captureRestored(.mic)) {
-                sources.mic.emit(frames: 1600, hostTime: 120 + Double(step) * 0.1)
-                sources.system.emit(frames: 1600, hostTime: 112 + Double(step) * 0.1)
-                step += 1
                 try await Task.sleep(for: .milliseconds(10))
             }
 
