@@ -136,6 +136,72 @@ struct MicrophoneSourceTests {
         source.stop()
     }
 
+    /// Runs `body` against a fresh source and hands back a weak reference to it.
+    ///
+    /// The source is created and released entirely inside this call, so by the time the
+    /// caller looks at what comes back, nothing in the test is holding it any more. Whatever
+    /// keeps it alive from here is something the source itself failed to let go of.
+    private func releasedAfter(
+        _ body: (MicrophoneSource, CountingSink) throws -> Void
+    ) throws -> () -> MicrophoneSource? {
+        weak var weakSource: MicrophoneSource?
+        try autoreleasepool {
+            let source = try MicrophoneSource(sampleRate: 16000)
+            weakSource = source
+            try body(source, CountingSink())
+        }
+        return { weakSource }
+    }
+
+    @Test(
+        "a source that was started and stopped is released",
+        .enabled(if: MicrophoneSourceTests.hardwareEnabled)
+    )
+    func startedAndStoppedSourceIsReleased() throws {
+        // A fresh engine per start is the right fix and also the change most likely to leak:
+        // every start installs a tap block and registers a notification observer, and every
+        // restart does it again. If either outlives its engine, a long session with repeated
+        // device changes accumulates dead engines — and an AVAudioEngine keeps a thread.
+        let check = try releasedAfter { source, sink in
+            try source.start(into: sink)
+            source.stop()
+        }
+        #expect(check() == nil)
+    }
+
+    @Test(
+        "a source that was never stopped is still released",
+        .enabled(if: MicrophoneSourceTests.hardwareEnabled)
+    )
+    func unstoppedSourceIsReleased() throws {
+        // The case that actually catches a retain cycle. `stop` tears the graph down by hand;
+        // skipping it leaves only `deinit` to do it, which cannot run at all if the tap block
+        // or the notification observer is holding the source strongly.
+        let check = try releasedAfter { source, sink in
+            try source.start(into: sink)
+        }
+        #expect(check() == nil)
+    }
+
+    @Test(
+        "restarting twenty times leaves nothing behind",
+        .enabled(if: MicrophoneSourceTests.hardwareEnabled)
+    )
+    func repeatedRestartsReleaseEverySource() throws {
+        // One source restarted many times is the earlier test; this is many sources, each
+        // restarted, which is what a day of recordings looks like.
+        var checks: [() -> MicrophoneSource?] = []
+        for _ in 0 ..< 20 {
+            checks.append(try releasedAfter { source, sink in
+                try source.start(into: sink)
+                source.stop()
+                try source.start(into: sink)
+                source.stop()
+            })
+        }
+        #expect(checks.allSatisfy { $0() == nil })
+    }
+
     @Test(
         "the default input device can be named",
         .enabled(if: MicrophoneSourceTests.hardwareEnabled)
