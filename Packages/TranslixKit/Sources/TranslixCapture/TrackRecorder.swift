@@ -29,6 +29,15 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
     private let pendingLock = NSLock()
     private var pendingChunks: [ChunkRef] = []
 
+    /// Every chunk this recorder has ever closed, in order.
+    ///
+    /// Kept alongside the pending queue rather than derived from it, because
+    /// `takePendingChunks` empties that queue and more than one caller reads it: a flush
+    /// spawned by a chunk closing can drain it moments before `stop` goes looking. This list
+    /// is never emptied, so whoever ends the recording can hand the manifest the whole thing
+    /// regardless of who else has been reading.
+    private var closedChunks: [ChunkRef] = []
+
     /// Host time of the first frame ever delivered, as a `Double` bit pattern.
     ///
     /// Written from the audio thread — a plain atomic store, which is real-time safe — and
@@ -175,6 +184,13 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
 
     var isPaused: Bool { paused.load(ordering: .relaxed) }
 
+    /// Every chunk closed so far, without consuming anything. Safe from any thread.
+    var allClosedChunks: [ChunkRef] {
+        pendingLock.lock()
+        defer { pendingLock.unlock() }
+        return closedChunks
+    }
+
     /// Hands over every chunk closed since the last call. Safe from any thread.
     func takePendingChunks() -> [ChunkRef] {
         pendingLock.lock()
@@ -187,6 +203,7 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
     private func enqueue(_ chunk: ChunkRef) {
         pendingLock.lock()
         pendingChunks.append(chunk)
+        closedChunks.append(chunk)
         pendingLock.unlock()
         onChunkClosed?()
     }

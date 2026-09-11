@@ -304,6 +304,34 @@ public actor RecordingCoordinator {
         }
     }
 
+    /// Writes everything a track has ever closed, not only what is still pending.
+    ///
+    /// Used where a recording ends, and the difference from `flushTrack` is the whole point.
+    /// `flushTrack` also runs from `onChunkClosed`, in a task nothing holds, and it *consumes*
+    /// the pending queue. So an in-flight flush can have taken the last chunk out of the queue
+    /// and not yet written it at the instant `stop` goes looking — leaving `stop` to return
+    /// against a manifest that under-reports the recording it just finished, which is the one
+    /// thing `stop` promises never to do. Reproducible under load: two chunk files on disk and
+    /// one of them in the manifest, the second arriving a few hundred milliseconds later.
+    ///
+    /// Appending the recorder's full record closes the gap. Chunks are keyed by index, so
+    /// writing one twice costs nothing and the racing flush can land whenever it likes.
+    private func flushEverything(_ track: AudioTrack) async {
+        guard let handle, let recorder = recorders[track] else { return }
+
+        if let hostTime = recorder.firstBufferHostTime {
+            try? await handle.recordFirstBuffer(hostTime: hostTime, for: track)
+        }
+        _ = recorder.takePendingChunks()
+        for chunk in recorder.allClosedChunks {
+            do {
+                try await handle.appendChunk(chunk, to: track)
+            } catch {
+                emit(.writeFailed(track, error.localizedDescription))
+            }
+        }
+    }
+
     /// Handles a device change without ending the session.
     ///
     /// The source has already rebuilt itself by the time this runs; all that is left is to
@@ -455,12 +483,12 @@ public actor RecordingCoordinator {
         isRecording = false
         isPaused = false
 
-        // Each recorder drains synchronously, so once this returns everything that reached
-        // the disk is sitting in the pending queues.
+        // Each recorder drains synchronously, so once this returns every sample that reached
+        // the disk has been closed into a chunk the recorder knows about.
         await cleanUp()
 
         for track in AudioTrack.allCases {
-            await flushTrack(track)
+            await flushEverything(track)
         }
         for (track, recorder) in recorders where recorder.droppedFrames > 0 {
             emit(.droppedFrames(track, recorder.droppedFrames))
@@ -483,7 +511,7 @@ public actor RecordingCoordinator {
         isPaused = false
         await cleanUp()
         for track in AudioTrack.allCases {
-            await flushTrack(track)
+            await flushEverything(track)
         }
         recorders.removeAll()
         sources.removeAll()
