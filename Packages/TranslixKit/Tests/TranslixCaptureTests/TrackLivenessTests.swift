@@ -87,11 +87,11 @@ struct TrackLivenessTests {
             sources.emitBoth(seconds: 2, hostTime: 100)
             try await waitForRecorded(2, on: recorder)
 
-            // The microphone dies. The meeting goes on, so the system track keeps delivering.
-            for step in 0 ..< 20 {
-                sources.system.emit(frames: 1600, hostTime: 102 + Double(step) * 0.1)
-                try await Task.sleep(for: .milliseconds(10))
-            }
+            // The microphone dies. The meeting goes on, so the system track keeps delivering —
+            // from a queue, so that it stays genuinely alive while the pool is busy and the
+            // contrast with the dead microphone is real.
+            let emitter = ContinuousEmitter(feeding: [sources.system], from: 102)
+            defer { emitter.stop() }
 
             try await waitForStart(count: 2, of: sources.mic)
             #expect(sources.mic.stopCount >= 1)
@@ -112,11 +112,11 @@ struct TrackLivenessTests {
             sources.emitBoth(seconds: 2, hostTime: 100)
             try await waitForRecorded(2, on: recorder)
 
-            for step in 0 ..< 20 {
-                sources.system.emit(frames: 1600, hostTime: 102 + Double(step) * 0.1)
-                try await Task.sleep(for: .milliseconds(10))
-            }
+            let emitter = ContinuousEmitter(feeding: [sources.system], from: 102)
+            defer { emitter.stop() }
+
             try await waitForStart(count: 2, of: sources.mic)
+            emitter.stop()
             try await recorder.stop()
 
             let changes = await handle.manifest.deviceChanges
@@ -131,14 +131,24 @@ struct TrackLivenessTests {
             let recorder = coordinator(root: root, sources: sources)
             _ = try await recorder.start(title: "Clase", language: .spanish, now: epoch)
 
-            for step in 0 ..< 30 {
-                sources.emitBoth(seconds: 0.1, hostTime: 100 + Double(step) * 0.1)
-                try await Task.sleep(for: .milliseconds(10))
-            }
+            // Fed from a dispatch queue rather than from this task. Emitting inside the test's
+            // own `async` body means competing for the cooperative pool with every other test
+            // in the suite, and a loop starved for one liveness interval leaves the track
+            // genuinely silent — at which point a restart is the correct behaviour and the
+            // test is failing for being wrong about its own premise.
+            let emitter = ContinuousEmitter(feeding: [sources.mic, sources.system])
+            defer { emitter.stop() }
+
+            // Proof the tracks are actually delivering before judging what liveness did with
+            // them. Half a second of audio, at roughly real time, is ten checks at this
+            // suite's interval; the settle adds six more.
+            try await waitForAtLeastRecorded(0.5, on: recorder)
+            try await settleExpectingNoRestart()
 
             #expect(sources.mic.startCount == 1)
             #expect(sources.system.startCount == 1)
 
+            emitter.stop()
             try await recorder.stop()
         }
     }
@@ -150,9 +160,15 @@ struct TrackLivenessTests {
             let recorder = coordinator(root: root, sources: sources)
             _ = try await recorder.start(title: "Clase", language: .spanish, now: epoch)
 
-            sources.emitBoth(seconds: 2, hostTime: 100)
-            try await waitForRecorded(2, on: recorder)
+            // Kept alive right up to the pause. A single emit followed by a wait leaves the
+            // tracks silent for however long the wait takes, and under load that is long
+            // enough for liveness to conclude — correctly — that both of them died.
+            let emitter = ContinuousEmitter(feeding: [sources.mic, sources.system])
+            defer { emitter.stop() }
+
+            try await waitForAtLeastRecorded(0.5, on: recorder)
             try await recorder.pause(now: epoch)
+            emitter.stop()
 
             // Nothing is written while paused, which is exactly what a dead track looks like.
             try await settleExpectingNoRestart()

@@ -52,6 +52,15 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
     /// would stall behind a disk write.
     private let writtenFrames = Atomic<Int64>(0)
 
+    /// Frames the capture backend has handed over, whether or not the writer has caught up.
+    ///
+    /// Separate from `writtenFrames` because the two answer different questions and only one
+    /// of them is about the microphone. `writtenFrames` moves on the writer queue, which runs
+    /// at utility priority and is the first thing the system starves when the machine is
+    /// busy; a recorder can go most of a second without it moving while audio keeps arriving
+    /// perfectly well. Anything asking "is this source still delivering?" has to read this one.
+    private let acceptedFrames = Atomic<Int64>(0)
+
     /// While set, incoming audio is discarded instead of recorded.
     ///
     /// Read on the audio thread, so it has to be an atomic load and nothing more. Dropping
@@ -117,6 +126,7 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
             ordering: .relaxed
         )
         ring.write(samples, count: frameCount)
+        acceptedFrames.add(Int64(frameCount), ordering: .relaxed)
     }
 
     // MARK: - Writer queue
@@ -271,5 +281,14 @@ final class TrackRecorder: AudioSink, @unchecked Sendable {
     /// has to do to keep pointing at the right moment of the file.
     var totalFrames: Int64 {
         writtenFrames.load(ordering: .relaxed)
+    }
+
+    /// Frames accepted from the capture backend, before the writer queue has seen them.
+    ///
+    /// The liveness signal. Never use it for anything the user sees: it counts audio that is
+    /// on its way to the disk, not audio that is on the disk, and the gap between the two is
+    /// exactly what the manifest must not lie about.
+    var receivedFrames: Int64 {
+        acceptedFrames.load(ordering: .relaxed)
     }
 }
