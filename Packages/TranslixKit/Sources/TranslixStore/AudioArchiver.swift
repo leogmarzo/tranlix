@@ -60,7 +60,11 @@ public enum AudioArchiver {
         let expectedSeconds = Double(expected) / sampleRate
 
         do {
-            try encode(chunks: chunks, layout: layout, sampleRate: sampleRate, to: destination)
+            try encode(
+                sources: chunks.sorted { $0.index < $1.index }.map(layout.chunkURL),
+                sampleRate: sampleRate,
+                to: destination
+            )
         } catch let error as ArchiveError {
             try? FileManager.default.removeItem(at: destination)
             throw error
@@ -108,15 +112,28 @@ public enum AudioArchiver {
             at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
         )
         try? FileManager.default.removeItem(at: destination)
-        try encode(chunks: chunks, layout: layout, sampleRate: sampleRate, to: destination)
+        try encode(
+            sources: chunks.sorted { $0.index < $1.index }.map(layout.chunkURL),
+            sampleRate: sampleRate,
+            to: destination
+        )
     }
 
-    private static func encode(
-        chunks: [ChunkRef],
-        layout: SessionLayout,
-        sampleRate: Double,
-        to destination: URL
-    ) throws {
+    /// Encodes audio files, in the order given, into one AAC file at a chosen destination.
+    ///
+    /// The generalisation `concatenate` always wanted. Nothing about joining audio requires
+    /// the pieces to be chunks the layout knows about, and a caller that needs a contiguous
+    /// stretch of a track — one batch of it to send to a remote engine, say — has a list of
+    /// URLs and no reason to invent `ChunkRef`s to pass them.
+    public static func encode(sources: [URL], sampleRate: Double, to destination: URL) throws {
+        guard !sources.isEmpty else {
+            throw ArchiveError.encodingFailed("no hay nada para codificar")
+        }
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try? FileManager.default.removeItem(at: destination)
+
         let output = try AVAudioFile(
             forWriting: destination,
             settings: [
@@ -134,8 +151,7 @@ public enum AudioArchiver {
             throw ArchiveError.encodingFailed("no se pudo reservar el buffer de lectura")
         }
 
-        for chunk in chunks.sorted(by: { $0.index < $1.index }) {
-            let url = layout.chunkURL(chunk)
+        for url in sources {
             guard let input = try? AVAudioFile(forReading: url) else {
                 throw ArchiveError.chunkUnreadable(url)
             }
@@ -144,6 +160,72 @@ public enum AudioArchiver {
                 guard buffer.frameLength > 0 else { break }
                 try output.write(from: buffer)
             }
+        }
+    }
+
+    /// Cuts one frame range out of an archive into an AAC file at a chosen destination.
+    ///
+    /// What makes a re-run of an archived session batch-granular rather than all-or-nothing,
+    /// the same promise `split` keeps for the chunk path — but producing the compressed shape
+    /// a remote engine should be sent, instead of the raw PCM `split` writes, which is eight
+    /// times the bytes and nothing anybody should be asked to upload.
+    ///
+    /// The range is nominal, in frames of the original recording. AAC priming and padding
+    /// mean the audio it yields can differ from the same range read out of the CAF chunks by
+    /// a fraction of a second — the same bargain the archive's own verification already makes
+    /// with its one-second tolerance, and the same drift `split` has always had.
+    public static func extract(
+        archive url: URL,
+        range: Range<Int64>,
+        sampleRate: Double,
+        to destination: URL
+    ) throws {
+        guard !range.isEmpty else {
+            throw ArchiveError.encodingFailed("el rango pedido está vacío")
+        }
+        guard let input = try? AVAudioFile(forReading: url) else {
+            throw ArchiveError.chunkUnreadable(url)
+        }
+        try FileManager.default.createDirectory(
+            at: destination.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try? FileManager.default.removeItem(at: destination)
+
+        // Clamped rather than trusted: the range comes from the manifest's frame counts, and
+        // the archive is an AAC re-encoding of those frames, so the two agree to within the
+        // encoder's padding and not exactly.
+        input.framePosition = min(range.lowerBound, input.length)
+        let wantedTotal = min(range.upperBound, input.length) - input.framePosition
+        guard wantedTotal > 0 else {
+            throw ArchiveError.encodingFailed(
+                "el rango pedido cae fuera del archivo comprimido"
+            )
+        }
+
+        let output = try AVAudioFile(
+            forWriting: destination,
+            settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC,
+                AVSampleRateKey: sampleRate,
+                AVNumberOfChannelsKey: 1,
+                AVEncoderBitRateKey: bitRate,
+            ],
+            commonFormat: .pcmFormatFloat32,
+            interleaved: false
+        )
+
+        let format = input.processingFormat
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16384) else {
+            throw ArchiveError.encodingFailed("no se pudo reservar el buffer de lectura")
+        }
+
+        var written: Int64 = 0
+        while written < wantedTotal, input.framePosition < input.length {
+            let wanted = min(AVAudioFrameCount(wantedTotal - written), buffer.frameCapacity)
+            try input.read(into: buffer, frameCount: wanted)
+            guard buffer.frameLength > 0 else { break }
+            try output.write(from: buffer)
+            written += Int64(buffer.frameLength)
         }
     }
 

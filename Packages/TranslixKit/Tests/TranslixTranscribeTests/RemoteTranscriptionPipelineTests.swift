@@ -258,6 +258,231 @@ struct RemoteTranscriptionPipelineTests {
         }
     }
 
+    // MARK: - Batching
+
+    /// Times a batch can be recognised by: a quarter-second segment a quarter-second in.
+    private static func marker(for track: AudioTrack) -> [TranscriptSegment] {
+        [TranscriptSegment(
+            track: track, speakerID: nil, start: 0.25, end: 0.5, text: "marca",
+            words: [TranscriptWord(text: "marca", start: 0.25, end: 0.5)]
+        )]
+    }
+
+    @Test("an engine with an upload ceiling gets one request per batch, not per track")
+    func batchesAreSentSeparately() async throws {
+        try await withTemporaryRoot { root in
+            // Four seconds a track, in one-second chunks, with a two-second ceiling.
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000, 16000, 16000],
+                systemChunks: [16000, 16000, 16000, 16000]
+            )
+            let engine = StubTrackEngine(separatesSpeakers: false, maxUploadSeconds: 2)
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            #expect(await engine.trackCallCount == 4)
+            // Not merely more calls: the audio was actually cut. Two chunks each.
+            let seconds = await engine.transcribedSeconds
+            #expect(seconds.allSatisfy { abs($0 - 2.0) <= 1.0 })
+        }
+    }
+
+    @Test("failing partway through a track costs one batch, not the track")
+    func aFailedBatchCostsOneBatch() async throws {
+        try await withTemporaryRoot { root in
+            // Four one-second batches on the microphone alone, so the arithmetic is plain.
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000, 16000, 16000],
+                systemChunks: []
+            )
+            let engine = StubTrackEngine(
+                failAfter: 2, separatesSpeakers: false, maxUploadSeconds: 1
+            )
+            let pipeline = TranscriptionPipeline(engine: engine)
+
+            await #expect(throws: (any Error).self) {
+                try await pipeline.transcribe(
+                    session: handle, language: self.language, progress: { _ in }
+                )
+            }
+            #expect(await engine.trackCallCount == 2)
+
+            // This is the assertion the whole change exists for. Before batching, a failure
+            // anywhere in a track threw the whole track away and the retry paid for all four
+            // seconds again; now it pays for the two that never landed.
+            await engine.setFailAfter(nil)
+            try await pipeline.transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+            #expect(await engine.trackCallCount == 4)
+        }
+    }
+
+    @Test("an engine that wants whole tracks still gets exactly one request per track")
+    func wholeTrackEnginesAreUnchanged() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000, 16000, 16000],
+                systemChunks: [16000, 16000, 16000, 16000]
+            )
+            // No ceiling, which is what AssemblyAI declares: speaker identity comes from
+            // clustering the whole recording and cannot be stitched across requests.
+            let engine = StubTrackEngine()
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            #expect(await engine.trackCallCount == 2)
+            #expect(await engine.transcribedTracks == [.mic, .system])
+        }
+    }
+
+    @Test("each batch's times land where that batch begins, words included")
+    func batchTimesAreRebasedByPosition() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000, 16000],
+                systemChunks: [],
+                micStart: 100
+            )
+            let engine = StubTrackEngine(
+                separatesSpeakers: false,
+                maxUploadSeconds: 1,
+                segmentsForTrack: { Self.marker(for: $0) }
+            )
+
+            let transcript = try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            // Batch-relative 0.25 plus where each batch starts in the track. Using the bare
+            // track offset here instead would stack all three on top of each other.
+            #expect(transcript.segments.map(\.start) == [0.25, 1.25, 2.25])
+            #expect(transcript.segments.compactMap { $0.words.first?.start } == [0.25, 1.25, 2.25])
+        }
+    }
+
+    @Test("what is stored stays batch-relative, so a re-run can rebase it again")
+    func storedSegmentsStayBatchRelative() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000, 16000],
+                systemChunks: []
+            )
+            let engine = StubTrackEngine(
+                separatesSpeakers: false,
+                maxUploadSeconds: 1,
+                segmentsForTrack: { Self.marker(for: $0) }
+            )
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            // The third batch is filed under its first chunk's index, and holds the engine's
+            // own answer untouched — the same rule the chunk path follows.
+            let stored = await handle.chunkTranscript(
+                engineID: engine.id.rawValue, track: .mic, chunkIndex: 2
+            )
+            #expect(stored?.segments.first?.start == 0.25)
+            #expect(stored?.chunkFingerprint == "batch-32000-16000")
+        }
+    }
+
+    @Test("the batch cache survives archiving, because the audio did not change")
+    func batchCacheSurvivesArchiving() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000, 16000, 16000],
+                systemChunks: [16000, 16000]
+            )
+            let engine = StubTrackEngine(separatesSpeakers: false, maxUploadSeconds: 2)
+            let pipeline = TranscriptionPipeline(engine: engine)
+
+            // `process` archives, which deletes the CAFs the first run read.
+            try await pipeline.process(
+                session: handle, language: language, progress: { _ in }
+            )
+            let afterFirst = await engine.trackCallCount
+
+            try await pipeline.transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            // Fingerprinted by frame range, never by what the encoder produced, so nothing
+            // is uploaded — or paid for — a second time.
+            #expect(await engine.trackCallCount == afterFirst)
+        }
+    }
+
+    @Test("a session transcribed before batching is not paid for twice")
+    func legacyWholeTrackResultsAreStillHonoured() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000],
+                systemChunks: [16000, 16000]
+            )
+            let engine = StubTrackEngine(separatesSpeakers: false, maxUploadSeconds: 1)
+
+            // Exactly what the whole-track path used to write: chunk zero, fingerprinted by
+            // the track's total frames.
+            for track in AudioTrack.allCases {
+                try await handle.writeChunkTranscript(ChunkTranscript(
+                    chunkIndex: 0,
+                    track: track,
+                    engineID: engine.id.rawValue,
+                    localeIdentifier: language.identifier,
+                    chunkFingerprint: "frames-32000",
+                    generatedAt: epoch,
+                    segments: Self.marker(for: track)
+                ))
+            }
+
+            let transcript = try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            #expect(await engine.trackCallCount == 0)
+            #expect(transcript.segments.count == 2)
+        }
+    }
+
+    @Test("a retry does not walk the progress bar backwards")
+    func retryingKeepsFractionsAscending() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000],
+                systemChunks: [16000, 16000]
+            )
+            let phases = Locked<[TranscriptionPhase]>([])
+            let engine = StubTrackEngine(separatesSpeakers: false, maxUploadSeconds: 1)
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language,
+                progress: { phase in phases.withValue { $0.append(phase) } }
+            )
+
+            let seen = phases.value
+            // Four batches, so the strip has to name which one.
+            #expect(seen.contains { phase in
+                if case let .uploading(batch, _) = phase { batch.total == 4 } else { false }
+            })
+            let fractions = seen.map { $0.fraction }
+            #expect(zip(fractions, fractions.dropFirst()).allSatisfy { $0 <= $1 })
+        }
+    }
+
     // MARK: - Cancelling
 
     @Test("cancelling stops the run and puts the session back, rather than failing it")

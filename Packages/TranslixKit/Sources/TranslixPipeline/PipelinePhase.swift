@@ -66,13 +66,18 @@ public enum PipelinePhase: Sendable, Equatable {
                 : "Transcribiendo fragmento \(completed) de \(total)"
         case .preparingUpload:
             "Preparando el audio para subir…"
-        case let .uploading(track, _):
-            "Subiendo \(track.spokenName)…"
-        case .waitingRemote:
-            // Now simply true: the job runs on the server, polling pauses with sleep and
-            // resumes on wake. Saying so is the point — this line retires the one habit
-            // that used to hang machines.
-            "Transcribiendo en el servidor. Podés cerrar la tapa: la app retoma sola."
+        case let .uploading(batch, _):
+            "Subiendo \(batch.track.spokenName), bloque \(batch.index) de \(batch.total)…"
+        case let .waitingRemote(batch, _):
+            // This line used to promise the lid could be closed. It was not true of
+            // either remote engine: DeepInfra's endpoint is one blocking request, and
+            // AssemblyAI never persists its job id, so a poll loop killed by sleep cannot
+            // re-attach and the next run re-uploads and re-pays. What replaces it is the
+            // property the batching was built to give, and that one is true.
+            "Transcribiendo el bloque \(batch.index) de \(batch.total) en el servidor. "
+                + "Si se corta, se retoma desde este bloque."
+        case let .retryingRemote(batch, attempt, of, _):
+            "Reintentando el bloque \(batch.index) (intento \(attempt) de \(of))…"
         case .archiving:
             "Comprimiendo el audio y verificando antes de borrar los fragmentos…"
         case .finished:

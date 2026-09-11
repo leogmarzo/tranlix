@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import TranslixModel
 import TranslixTranscribe
@@ -17,6 +18,14 @@ public actor StubTrackEngine: TrackTranscribing {
 
     public private(set) var transcribedTracks: [AudioTrack] = []
     public private(set) var prepareCount = 0
+
+    /// How long each call was actually handed, in seconds of audio.
+    ///
+    /// Measured from the file rather than assumed, because the assertion that matters about
+    /// batching is that the pipeline cut the audio, not merely that it made more calls.
+    public private(set) var transcribedSeconds: [Double] = []
+
+    public nonisolated let maxUploadSeconds: Double?
 
     /// What each call was asked to transcribe in, in order.
     public private(set) var requestedLanguages: [TranscriptionLanguage] = []
@@ -40,8 +49,10 @@ public actor StubTrackEngine: TrackTranscribing {
         delayPerTrack: Duration? = nil,
         detectedLanguage: String? = nil,
         separatesSpeakers: Bool = true,
+        maxUploadSeconds: Double? = nil,
         segmentsForTrack: (@Sendable (AudioTrack) -> [TranscriptSegment])? = nil
     ) {
+        self.maxUploadSeconds = maxUploadSeconds
         self.id = id
         self.availability = availability
         self.failAfter = failAfter
@@ -70,7 +81,7 @@ public actor StubTrackEngine: TrackTranscribing {
     }
 
     public func transcribe(
-        trackFile _: URL,
+        trackFile: URL,
         track: AudioTrack,
         language: TranscriptionLanguage,
         progress: @escaping @Sendable (TrackTranscriptionPhase) -> Void
@@ -85,6 +96,11 @@ public actor StubTrackEngine: TrackTranscribing {
             throw TranscriptionError.engineFailed("stub remoto falló a propósito")
         }
         transcribedTracks.append(track)
+        if let file = try? AVAudioFile(forReading: trackFile) {
+            transcribedSeconds.append(Double(file.length) / file.processingFormat.sampleRate)
+        } else {
+            transcribedSeconds.append(0)
+        }
 
         progress(.uploading(0.5))
         progress(.waiting)
