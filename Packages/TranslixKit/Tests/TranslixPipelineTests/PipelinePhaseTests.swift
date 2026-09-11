@@ -43,30 +43,50 @@ struct PipelinePhaseTests {
     @Test("the remote phases explain what is happening, and where")
     func remotePhasesExplainThemselves() {
         #expect(PipelinePhase.transcribing(.preparingUpload).detail.contains("subir"))
+
+        let system = RemoteBatch(track: .system, index: 3, total: 6)
+        let systemDetail = PipelinePhase.transcribing(.uploading(system, fraction: 0.2)).detail
+        #expect(systemDetail.contains("el audio del sistema"))
+        // Which batch, not just which track: an hour-long session is a dozen requests,
+        // and a line that never changes for twenty minutes reads as a hang.
+        #expect(systemDetail.contains("bloque 3 de 6"))
+
+        let mic = RemoteBatch(track: .mic, index: 1, total: 6)
         #expect(
-            PipelinePhase.transcribing(.uploading(track: .system, fraction: 0.2)).detail
-                .contains("el audio del sistema")
-        )
-        #expect(
-            PipelinePhase.transcribing(.uploading(track: .mic, fraction: 0.2)).detail
+            PipelinePhase.transcribing(.uploading(mic, fraction: 0.2)).detail
                 .contains("el micrófono")
         )
+        #expect(
+            PipelinePhase.transcribing(
+                .retryingRemote(mic, attempt: 2, of: 3, fraction: 0.2)
+            ).detail.contains("intento 2 de 3")
+        )
 
-        // The one sentence this whole feature exists for: closing the lid is now safe, and
-        // the strip is where the user learns it.
-        let waiting = PipelinePhase.transcribing(.waitingRemote(fraction: 0.5)).detail
+        // The sentence the remote path exists to be able to make. It used to promise the
+        // lid could be closed, which was true of neither engine; what it promises now is
+        // that a run cut short resumes at the batch it stopped on, which is true because
+        // every finished batch is already on disk.
+        let batch = RemoteBatch(track: .system, index: 2, total: 6)
+        let waiting = PipelinePhase.transcribing(.waitingRemote(batch, fraction: 0.5)).detail
         #expect(waiting.contains("servidor"))
-        #expect(waiting.contains("cerrar la tapa"))
+        #expect(waiting.contains("se retoma"))
+        #expect(waiting.contains("2 de 6"))
     }
 
     @Test("remote fractions ascend through the run, so the bar never walks backwards")
     func remoteFractionsAscend() {
+        let first = RemoteBatch(track: .mic, index: 1, total: 2)
+        let second = RemoteBatch(track: .system, index: 2, total: 2)
         let run: [TranscriptionPhase] = [
             .preparingUpload,
-            .uploading(track: .mic, fraction: 0.3),
-            .waitingRemote(fraction: 0.4),
-            .uploading(track: .system, fraction: 0.8),
-            .waitingRemote(fraction: 0.9),
+            .uploading(first, fraction: 0.3),
+            .waitingRemote(first, fraction: 0.4),
+            // A retry sits at the same fraction as the wait it interrupts: not progress,
+            // but not a step backwards either.
+            .retryingRemote(first, attempt: 2, of: 3, fraction: 0.4),
+            .waitingRemote(first, fraction: 0.4),
+            .uploading(second, fraction: 0.8),
+            .waitingRemote(second, fraction: 0.9),
             .archiving,
             .finished,
         ]
@@ -81,8 +101,11 @@ struct PipelinePhaseTests {
             .transcribing(.archiving),
             .transcribing(.finished),
             .transcribing(.preparingUpload),
-            .transcribing(.uploading(track: .mic, fraction: 0.5)),
-            .transcribing(.waitingRemote(fraction: 0.5)),
+            .transcribing(.uploading(RemoteBatch(track: .mic, index: 1, total: 3), fraction: 0.5)),
+            .transcribing(.waitingRemote(RemoteBatch(track: .mic, index: 1, total: 3), fraction: 0.5)),
+            .transcribing(.retryingRemote(
+                RemoteBatch(track: .mic, index: 1, total: 3), attempt: 2, of: 3, fraction: 0.5
+            )),
             .diarizing(.preparingModel(fraction: 0.5)),
             .diarizing(.separatingVoices(fraction: 0.5)),
             .diarizing(.merging),
