@@ -10,15 +10,40 @@ struct DeepInfraEngineTests {
     private func engine(
         key: String? = "di-test-key",
         model: String = DeepInfraEngine.defaultModel,
+        requestTimeout: TimeInterval = DeepInfraEngine.defaultRequestTimeout,
+        maxAttempts: Int = RemoteRetry.maxAttempts,
         respond: @escaping @Sendable (URLRequest) -> (Int, Data)
     ) -> DeepInfraEngine {
-        DeepInfraStubTransport.handler = respond
+        engine(
+            key: key, model: model, requestTimeout: requestTimeout, maxAttempts: maxAttempts
+        ) { request in
+            let (status, data) = respond(request)
+            return .response(status, data)
+        }
+    }
+
+    /// The full form, for the tests that need the transport to fail rather than answer.
+    ///
+    /// The delay is always zero here. The real ladder is twelve seconds, which is the right
+    /// thing to make a person wait through once and the wrong thing to make a test suite wait
+    /// through on every run.
+    private func engine(
+        key: String? = "di-test-key",
+        model: String = DeepInfraEngine.defaultModel,
+        requestTimeout: TimeInterval = DeepInfraEngine.defaultRequestTimeout,
+        maxAttempts: Int = RemoteRetry.maxAttempts,
+        outcome: @escaping @Sendable (URLRequest) -> DeepInfraStubOutcome
+    ) -> DeepInfraEngine {
+        DeepInfraStubTransport.handler = outcome
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [DeepInfraStubTransport.self]
         return DeepInfraEngine(
             apiKey: { key },
             model: model,
-            session: URLSession(configuration: configuration)
+            session: URLSession(configuration: configuration),
+            requestTimeout: requestTimeout,
+            maxAttempts: maxAttempts,
+            retryDelay: { _ in .zero }
         )
     }
 
@@ -221,6 +246,159 @@ struct DeepInfraEngineTests {
         #expect(!called.value)
     }
 
+    // MARK: - Retry
+
+    @Test("a server that goes quiet once is asked again")
+    func transientTimeoutIsRetried() async throws {
+        let calls = Locked(0)
+        let sut = engine { _ in
+            let call = calls.withValue { $0 += 1; return $0 }
+            // The exact failure that lost a twenty-four-minute session: the audio went out,
+            // and nothing came back.
+            return call == 1 ? .failure(URLError(.timedOut)) : .response(200, Self.success)
+        }
+
+        let result = try await sut.transcribe(
+            trackFile: try audioFile(), track: .mic, language: .fixed("es")
+        ) { _ in }
+
+        #expect(calls.value == 2)
+        #expect(!result.segments.isEmpty)
+    }
+
+    @Test("a server that stays quiet is given up on, and the message says the audio arrived")
+    func persistentSilenceGivesUp() async throws {
+        let calls = Locked(0)
+        let sut = engine(maxAttempts: 3) { _ in
+            calls.withValue { $0 += 1 }
+            return .failure(URLError(.timedOut))
+        }
+
+        do {
+            _ = try await sut.transcribe(
+                trackFile: try audioFile(), track: .mic, language: .fixed("es")
+            ) { _ in }
+            Issue.record("expected the silent server to throw")
+        } catch let TranscriptionError.engineFailed(message) {
+            #expect(message.contains("DeepInfra"))
+            #expect(message.contains("3 intentos"))
+        }
+
+        #expect(calls.value == 3)
+    }
+
+    @Test("the message separates a silent server from a cut upload")
+    func messageNamesWhetherTheAudioArrived() {
+        // Tested on the renderer rather than through the transport: a URLProtocol stub never
+        // emits didSendBodyData, so the upload delegate never sees a body go out and the
+        // distinction cannot be provoked from that side. It is worth testing anyway — it is
+        // the difference between "their handler never finished" and "our connection broke",
+        // which is the first thing anyone reading the failure needs to know.
+        let arrived = DeepInfraEngine.error(for: RemoteRetry.Exhausted(
+            failure: .transport(URLError(.timedOut), bodyFullySent: true),
+            attempts: 3,
+            elapsed: .seconds(240)
+        ))
+        #expect(arrived.localizedDescription.contains("recibió el audio"))
+        #expect(arrived.localizedDescription.contains("240 s"))
+
+        let cut = DeepInfraEngine.error(for: RemoteRetry.Exhausted(
+            failure: .transport(URLError(.networkConnectionLost), bodyFullySent: false),
+            attempts: 2,
+            elapsed: .seconds(12)
+        ))
+        #expect(cut.localizedDescription.contains("Se cortó la conexión"))
+
+        let offline = DeepInfraEngine.error(for: RemoteRetry.Exhausted(
+            failure: .transport(URLError(.notConnectedToInternet), bodyFullySent: false),
+            attempts: 3,
+            elapsed: .seconds(1)
+        ))
+        #expect(offline.localizedDescription.contains("conexión a internet"))
+
+        let tooBig = DeepInfraEngine.error(for: RemoteRetry.Exhausted(
+            failure: .status(413, detail: "payload too large"), attempts: 1, elapsed: .seconds(3)
+        ))
+        #expect(tooBig.localizedDescription.contains("bloques más cortos"))
+    }
+
+    @Test("a rejected key is tried exactly once")
+    func rejectedKeyIsNotRetried() async throws {
+        let calls = Locked(0)
+        let sut = engine { _ in
+            calls.withValue { $0 += 1 }
+            return (401, Data(#"{"detail":"unauthorized"}"#.utf8))
+        }
+
+        await #expect(throws: (any Error).self) {
+            _ = try await sut.transcribe(
+                trackFile: try self.audioFile(), track: .mic, language: .fixed("es")
+            ) { _ in }
+        }
+
+        // Three uploads of audio they have already refused would be three bills for the same
+        // answer. This is the assertion that catches an over-eager retry policy.
+        #expect(calls.value == 1)
+    }
+
+    @Test("a busy server is asked again, a bad request is not")
+    func retriesRateLimitsButNotBadRequests() async throws {
+        let busy = Locked(0)
+        let busySut = engine(maxAttempts: 3) { _ in
+            busy.withValue { $0 += 1 }
+            return (429, Data(#"{"detail":"slow down"}"#.utf8))
+        }
+        await #expect(throws: (any Error).self) {
+            _ = try await busySut.transcribe(
+                trackFile: try self.audioFile(), track: .mic, language: .fixed("es")
+            ) { _ in }
+        }
+        #expect(busy.value == 3)
+
+        let bad = Locked(0)
+        let badSut = engine(maxAttempts: 3) { _ in
+            bad.withValue { $0 += 1 }
+            return (400, Data(#"{"detail":"malformed"}"#.utf8))
+        }
+        await #expect(throws: (any Error).self) {
+            _ = try await badSut.transcribe(
+                trackFile: try self.audioFile(), track: .mic, language: .fixed("es")
+            ) { _ in }
+        }
+        #expect(bad.value == 1)
+    }
+
+    @Test("each request carries a timeout proportionate to one batch")
+    func requestTimeoutIsProportionate() async throws {
+        let seen = Locked<TimeInterval?>(nil)
+        let sut = engine { request in
+            seen.withValue { $0 = request.timeoutInterval }
+            return (200, Self.success)
+        }
+
+        _ = try await sut.transcribe(
+            trackFile: try audioFile(), track: .mic, language: .fixed("es")
+        ) { _ in }
+
+        // Four minutes, not the fifteen a whole track used to get. Nothing asserted this
+        // before, which is how the fifteen went unexamined until it cost a session.
+        #expect(seen.value == 240)
+        #expect(DeepInfraEngine.defaultMaxUploadSeconds == 600)
+    }
+
+    @Test("cancelling reads as cancellation, not as a failed transcription")
+    func cancellationIsNotAFailure() async throws {
+        let sut = engine { _ in .failure(URLError(.cancelled)) }
+
+        // URLSession reports a cancelled task as URLError(.cancelled). Read as a failure, it
+        // marks the session failed instead of putting it back the way it was.
+        await #expect(throws: CancellationError.self) {
+            _ = try await sut.transcribe(
+                trackFile: try self.audioFile(), track: .mic, language: .fixed("es")
+            ) { _ in }
+        }
+    }
+
     // MARK: - Registry
 
     @Test("the registry offers DeepInfra and reports it takes no disk")
@@ -243,8 +421,18 @@ struct DeepInfraEngineTests {
 
 // MARK: - Transport double
 
+/// What the stub does with one request: answer it, or fail the way the network would.
+///
+/// Failing matters as much as answering. The worst thing this engine has done was provoked
+/// by a server that accepted an upload and then sent nothing, and until the double could
+/// reproduce that, no test could say what the engine does about it.
+enum DeepInfraStubOutcome {
+    case response(Int, Data)
+    case failure(URLError)
+}
+
 private final class DeepInfraStubTransport: URLProtocol, @unchecked Sendable {
-    nonisolated(unsafe) static var handler: (@Sendable (URLRequest) -> (Int, Data))?
+    nonisolated(unsafe) static var handler: (@Sendable (URLRequest) -> DeepInfraStubOutcome)?
 
     override class func canInit(with _: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
@@ -254,13 +442,17 @@ private final class DeepInfraStubTransport: URLProtocol, @unchecked Sendable {
             client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
             return
         }
-        let (status, data) = handler(request)
-        let response = HTTPURLResponse(
-            url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil
-        )!
-        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: data)
-        client?.urlProtocolDidFinishLoading(self)
+        switch handler(request) {
+        case let .response(status, data):
+            let response = HTTPURLResponse(
+                url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: nil
+            )!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        case let .failure(error):
+            client?.urlProtocol(self, didFailWithError: error)
+        }
     }
 
     override func stopLoading() {}

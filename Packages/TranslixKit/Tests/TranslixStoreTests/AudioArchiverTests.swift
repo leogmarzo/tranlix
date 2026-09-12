@@ -238,4 +238,93 @@ struct AudioArchiverTests {
             #expect(abs(total - 48000) < Int64(sampleRate)) // within a second of the original
         }
     }
+
+    @Test("encoding an arbitrary subset of chunks yields exactly that much audio")
+    func encodesASubsetOfChunks() async throws {
+        try await withTemporaryRoot { root in
+            let layout = try layout(in: root)
+            // Four seconds of audio in four chunks; the batch wants the middle two.
+            let chunks = try (0 ..< 4).map {
+                try writeChunk(track: .mic, index: $0, frames: 16000, into: layout)
+            }
+
+            let destination = root.appending(path: "batch.m4a")
+            try AudioArchiver.encode(
+                sources: chunks[1 ... 2].map(layout.chunkURL),
+                sampleRate: sampleRate,
+                to: destination
+            )
+
+            let written = try AVAudioFile(forReading: destination)
+            let seconds = Double(written.length) / written.processingFormat.sampleRate
+            // The same one-second tolerance `archive` verifies with, and for the same
+            // reason: AAC adds priming and padding.
+            #expect(abs(seconds - 2.0) <= 1.0)
+        }
+    }
+
+    @Test("encoding nothing is an error rather than an empty file")
+    func encodingNothingFails() async throws {
+        try await withTemporaryRoot { root in
+            let destination = root.appending(path: "vacio.m4a")
+            #expect(throws: AudioArchiver.ArchiveError.self) {
+                try AudioArchiver.encode(sources: [], sampleRate: sampleRate, to: destination)
+            }
+            #expect(FileManager.default.fileExists(atPath: destination.path) == false)
+        }
+    }
+
+    @Test("a frame range can be cut out of an archive")
+    func extractsARangeFromAnArchive() async throws {
+        try await withTemporaryRoot { root in
+            let layout = try layout(in: root)
+            let chunks = try (0 ..< 4).map {
+                try writeChunk(track: .mic, index: $0, frames: 16000, into: layout)
+            }
+            let archived = try AudioArchiver.archive(
+                track: .mic, chunks: chunks, layout: layout, sampleRate: sampleRate
+            )
+            let archive = layout.audioDirectory.appending(path: archived.fileName)
+
+            // Once the chunks are gone this is the only way to send one batch of an archived
+            // session, which is what keeps a re-run from re-paying for the whole track.
+            AudioArchiver.removeChunks(chunks, layout: layout)
+
+            let destination = root.appending(path: "rango.m4a")
+            try AudioArchiver.extract(
+                archive: archive,
+                range: 16000 ..< 48000,
+                sampleRate: sampleRate,
+                to: destination
+            )
+
+            let written = try AVAudioFile(forReading: destination)
+            let seconds = Double(written.length) / written.processingFormat.sampleRate
+            #expect(abs(seconds - 2.0) <= 1.0)
+        }
+    }
+
+    @Test("a range beyond the end of the archive is an error, not a silent empty file")
+    func extractingBeyondTheEndFails() async throws {
+        try await withTemporaryRoot { root in
+            let layout = try layout(in: root)
+            let chunks = try (0 ..< 2).map {
+                try writeChunk(track: .mic, index: $0, frames: 16000, into: layout)
+            }
+            let archived = try AudioArchiver.archive(
+                track: .mic, chunks: chunks, layout: layout, sampleRate: sampleRate
+            )
+            let archive = layout.audioDirectory.appending(path: archived.fileName)
+
+            #expect(throws: AudioArchiver.ArchiveError.self) {
+                try AudioArchiver.extract(
+                    archive: archive,
+                    range: 500_000 ..< 600_000,
+                    sampleRate: sampleRate,
+                    to: root.appending(path: "fuera.m4a")
+                )
+            }
+        }
+    }
 }
+

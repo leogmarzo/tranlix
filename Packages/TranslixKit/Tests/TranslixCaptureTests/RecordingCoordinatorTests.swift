@@ -167,6 +167,10 @@ struct RecordingCoordinatorTests {
             let manifest = await handle.manifest
             #expect(manifest.track(.mic).totalFrames == 16000)
             #expect(manifest.track(.system).totalFrames == 0)
+            // A source that never started is never recorded, so nothing ever stops it. That
+            // is why `stop` has to be safe on a source that never ran: `deinit` is the path
+            // that actually reaches it.
+            #expect(sources.system.stopCount == 0)
         }
     }
 
@@ -244,6 +248,15 @@ struct RecordingCoordinatorTests {
                 #expect(file.fileFormat.sampleRate == 16000)
                 #expect(file.fileFormat.channelCount == 1)
             }
+
+            // And the other direction, which is the one that broke: nothing on disk may be
+            // missing from the manifest by the time `stop` returns. A chunk file the manifest
+            // never learns about is audio that transcription will silently skip, and a session
+            // that stopped normally never goes through the recovery that would adopt it.
+            let onDisk = try FileManager.default.contentsOfDirectory(
+                atPath: layout.chunksDirectory.path
+            ).filter { $0.hasSuffix(".caf") }
+            #expect(onDisk.count == manifest.track(.mic).chunks.count)
         }
     }
 

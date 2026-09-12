@@ -3,22 +3,60 @@ import Foundation
 import TranslixModel
 import TranslixStore
 
+/// Which piece of a remote run is in flight.
+///
+/// Carried through the phases because an hour-long session is now a dozen requests rather
+/// than two, and "Subiendo el micrófono…" sitting unchanged for twenty minutes is
+/// indistinguishable from a hang. Counted across the whole run rather than within a track,
+/// so the number on screen matches the bar underneath it.
+public struct RemoteBatch: Sendable, Equatable {
+    public var track: AudioTrack
+    /// 1-based, across every batch of every track in this run.
+    public var index: Int
+    public var total: Int
+
+    public init(track: AudioTrack, index: Int, total: Int) {
+        self.track = track
+        self.index = index
+        self.total = total
+    }
+}
+
 /// Where a session's transcription has got to.
-public enum TranscriptionPhase: Sendable, Equatable {
+///
+/// `indirect` is not about recursion here, and it is not decoration. Carrying a
+/// `RemoteBatch` in three cases took this enum from 25 bytes to 49, and at that size the
+/// key-path getter the compiler emits for `fraction` in *another module* dereferences a
+/// bad pointer and takes the process down — reproduced from a bare `phases.map(\.fraction)`,
+/// with the identical enum declared inside this module working fine. Boxing the payloads
+/// puts the value back to one word and the getter back to correct. The cost is an
+/// allocation per phase, on a type reported a few hundred times per session.
+///
+/// Worth removing when the toolchain is fixed, and worth keeping until then: the
+/// alternative is a public API whose most natural use segfaults for anyone outside this
+/// module.
+public indirect enum TranscriptionPhase: Sendable, Equatable {
     /// Downloading or loading the model. Can take minutes on a first run.
     case preparingEngine(fraction: Double)
 
     case transcribing(completed: Int, total: Int, reused: Int)
 
-    /// Joining chunks into one file per track before it goes up. Remote engines only.
+    /// Planning the batches before the first one goes up. Remote engines only.
+    ///
+    /// Reported once, before the loop. Its fraction sits below `uploading`'s floor, so
+    /// repeating it between batches would walk the bar backwards — which is why each batch's
+    /// audio is cut silently rather than announced.
     case preparingUpload
 
-    /// Sending a track. The fraction covers the whole remote run, so the bar never moves
-    /// backwards between one track's wait and the next track's upload.
-    case uploading(track: AudioTrack, fraction: Double)
+    /// Sending one batch. The fraction covers the whole remote run, so the bar never moves
+    /// backwards between one batch's wait and the next batch's upload.
+    case uploading(RemoteBatch, fraction: Double)
 
-    /// The job is running on AssemblyAI's servers; the app is just polling.
-    case waitingRemote(fraction: Double)
+    /// The batch is being transcribed on the server; the app is waiting.
+    case waitingRemote(RemoteBatch, fraction: Double)
+
+    /// The batch is being sent again after a transient failure.
+    case retryingRemote(RemoteBatch, attempt: Int, of: Int, fraction: Double)
 
     /// Compressing the audio and verifying the result before the originals go.
     case archiving
@@ -32,7 +70,10 @@ public enum TranscriptionPhase: Sendable, Equatable {
             total == 0 ? 0.9 : 0.1 + 0.8 * Double(completed) / Double(total)
         case .preparingUpload: 0.05
         case let .uploading(_, fraction): 0.1 + 0.8 * fraction
-        case let .waitingRemote(fraction): 0.1 + 0.8 * fraction
+        case let .waitingRemote(_, fraction): 0.1 + 0.8 * fraction
+        // Deliberately the same fraction as waiting: a retry is not progress, but it must
+        // not read as regress either.
+        case let .retryingRemote(_, _, _, fraction): 0.1 + 0.8 * fraction
         case .archiving: 0.95
         case .finished: 1
         }
@@ -259,9 +300,74 @@ public actor TranscriptionPipeline {
         return transcript
     }
 
-    // MARK: - Whole tracks
+    // MARK: - Batches
 
-    /// The remote path: one job per track, speakers included.
+    /// One contiguous stretch of a track, as sent in one request.
+    private struct UploadBatch {
+        let track: AudioTrack
+        let chunks: [ChunkRef]
+
+        /// The batch is filed under its first chunk's index, so a re-run looks in the same
+        /// place without having to remember how the track was cut last time.
+        var index: Int { chunks.first?.index ?? 0 }
+        var startFrame: Int64 { chunks.first?.startFrame ?? 0 }
+        var frameCount: Int64 { chunks.reduce(0) { $0 + $1.frameCount } }
+        var range: Range<Int64> { startFrame ..< (startFrame + frameCount) }
+    }
+
+    /// Cuts a track into batches no longer than the engine will take in one request.
+    ///
+    /// Accumulated by frame count rather than computed from an index. The last chunk of every
+    /// track is whatever was left when recording stopped, and a re-run over a split archive
+    /// produces chunks of the splitter's size, so multiplying an index by the nominal chunk
+    /// length would cut in the wrong places.
+    static func batches(
+        chunks: [ChunkRef],
+        sampleRate: Double,
+        maxSeconds: Double?
+    ) -> [[ChunkRef]] {
+        let ordered = chunks.sorted { $0.index < $1.index }
+        guard !ordered.isEmpty else { return [] }
+        guard let maxSeconds, maxSeconds > 0 else { return [ordered] }
+
+        let limit = Int64(maxSeconds * sampleRate)
+        var batches: [[ChunkRef]] = []
+        var current: [ChunkRef] = []
+        var frames: Int64 = 0
+
+        for chunk in ordered {
+            // A single chunk longer than the limit still goes on its own. Refusing it would
+            // mean refusing to transcribe the session at all, which is worse than sending
+            // one oversized request.
+            if !current.isEmpty, frames + chunk.frameCount > limit {
+                batches.append(current)
+                current = []
+                frames = 0
+            }
+            current.append(chunk)
+            frames += chunk.frameCount
+        }
+        if !current.isEmpty { batches.append(current) }
+        return batches
+    }
+
+    /// Identifies one batch of a track by the range of the recording it covers.
+    ///
+    /// Frames only, exactly like `trackFingerprint` and for the same reason: the same range of
+    /// the same recording must fingerprint identically whether it was read from the CAF chunks
+    /// or cut out of the archive that replaced them, or a re-run after archiving would
+    /// re-upload — and re-pay for — work already on disk. Nothing here depends on what the AAC
+    /// encoder happened to produce.
+    ///
+    /// The `batch-` prefix is load-bearing. A batch covering a whole track and the whole track
+    /// itself describe the same audio, and the whole-track path this replaced filed its result
+    /// at chunk zero under `frames-…`. Two different shapes of result must never read as each
+    /// other.
+    static func batchFingerprint(startFrame: Int64, frameCount: Int64) -> String {
+        "batch-\(startFrame)-\(frameCount)"
+    }
+
+    /// The remote path: one request per batch, each filed the moment it lands.
     private func transcribeTracks(
         _ remote: any TrackTranscribing,
         session handle: SessionHandle,
@@ -271,43 +377,89 @@ public actor TranscriptionPipeline {
         let manifest = await handle.manifest
         let layout = await handle.layout
 
-        // Scratch space for tracks joined from chunks. Removed however this ends.
+        // Scratch space for the batch files. Removed however this ends, and each batch's file
+        // goes as soon as its request resolves, so the peak is one batch rather than a track.
         let scratch = URL(filePath: NSTemporaryDirectory())
             .appending(path: "translix-remote-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: scratch) }
 
         let tracks = AudioTrack.allCases.filter { manifest.track($0).totalFrames > 0 }
-        let total = Double(tracks.count)
 
         var effective = language
-        var merged: [TranscriptSegment] = []
+        var perTrack: [AudioTrack: [TranscriptSegment]] = [:]
         var systemTurns: [SpeakerTurn] = []
-        var completed = 0
+
+        // Compatibility. Before batching, a whole track was filed at chunk zero under
+        // `frames-…`. Reading it here is what keeps a session transcribed by that version
+        // from being paid for a second time. Deletable once nothing on disk predates batching.
+        var alreadyWhole: Set<AudioTrack> = []
+        for track in tracks {
+            guard let legacy = await handle.chunkTranscript(
+                engineID: engine.id.rawValue, track: track, chunkIndex: 0
+            ), legacy.matches(
+                engineID: engine.id.rawValue,
+                localeIdentifier: effective.identifier,
+                chunkFingerprint: Self.trackFingerprint(manifest.track(track))
+            ) else { continue }
+
+            alreadyWhole.insert(track)
+            let offset = manifest.offset(for: track)
+            perTrack[track] = legacy.segments.map { Self.shift($0, by: offset) }
+            if track == .system {
+                systemTurns += legacy.segments.compactMap { segment in
+                    segment.speakerID.map {
+                        SpeakerTurn(
+                            speakerID: $0,
+                            start: segment.start + offset,
+                            end: segment.end + offset
+                        )
+                    }
+                }
+            }
+        }
+
+        // Planned from the manifest alone — pure arithmetic, no disk. That is what lets the
+        // strip say "bloque 3 de 12" from the first second, and what keeps a fully cached
+        // re-run from decoding a single frame of audio.
+        let plan = tracks.filter { !alreadyWhole.contains($0) }.flatMap { track in
+            Self.batches(
+                chunks: manifest.track(track).chunks,
+                sampleRate: manifest.sampleRate,
+                maxSeconds: remote.maxUploadSeconds
+            ).map { UploadBatch(track: track, chunks: $0) }
+        }
+        let total = Double(plan.count)
 
         progress(.preparingUpload)
 
-        for track in tracks {
-            // Between tracks, which bounds a cancellation to one track's work. A finished
-            // track is already persisted, so stopping here costs nothing on the next run.
+        for (position, batch) in plan.enumerated() {
+            // Between batches, which bounds a cancellation to one batch's work. A finished
+            // batch is already persisted, so stopping here costs nothing on the next run.
             try Task.checkCancellation()
 
-            let fingerprint = Self.trackFingerprint(manifest.track(track))
+            let descriptor = RemoteBatch(
+                track: batch.track, index: position + 1, total: plan.count
+            )
+            let fingerprint = Self.batchFingerprint(
+                startFrame: batch.startFrame, frameCount: batch.frameCount
+            )
             let cached = await handle.chunkTranscript(
-                engineID: engine.id.rawValue, track: track, chunkIndex: 0
+                engineID: engine.id.rawValue, track: batch.track, chunkIndex: batch.index
             )
 
-            let trackSegments: [TranscriptSegment]
-            let trackTurns: [SpeakerTurn]
+            let batchSegments: [TranscriptSegment]
+            let batchTurns: [SpeakerTurn]
+
             if let cached, cached.matches(
                 engineID: engine.id.rawValue,
                 localeIdentifier: effective.identifier,
                 chunkFingerprint: fingerprint
             ) {
-                trackSegments = cached.segments
-                // On this path a turn and a segment are the same utterance, so a cached
-                // track rebuilds its turns instead of storing a second copy. Only the
-                // per-utterance confidence is lost, and only on a re-run.
-                trackTurns = track == .system
+                batchSegments = cached.segments
+                // On this path a turn and a segment are the same utterance, so a cached batch
+                // rebuilds its turns instead of storing a second copy. Only the per-utterance
+                // confidence is lost, and only on a re-run.
+                batchTurns = batch.track == .system
                     ? cached.segments.compactMap { segment in
                         segment.speakerID.map {
                             SpeakerTurn(speakerID: $0, start: segment.start, end: segment.end)
@@ -315,64 +467,66 @@ public actor TranscriptionPipeline {
                     }
                     : []
             } else {
-                let file = try trackAudio(track, manifest: manifest, layout: layout, scratch: scratch)
+                let file = try batchAudio(
+                    batch, manifest: manifest, layout: layout, scratch: scratch
+                )
+                defer { try? FileManager.default.removeItem(at: file) }
 
                 // The receipt precedes the send, the same rule sharing a transcript follows.
                 try await handle.recordAudioShared(at: Date())
 
-                let done = Double(completed)
+                let done = Double(position)
                 let result = try await remote.transcribe(
-                    trackFile: file, track: track, language: effective
+                    trackFile: file, track: batch.track, language: effective
                 ) { phase in
                     switch phase {
                     case let .uploading(fraction):
-                        progress(.uploading(track: track, fraction: (done + 0.6 * fraction) / total))
+                        progress(.uploading(
+                            descriptor, fraction: (done + 0.6 * fraction) / total
+                        ))
                     case .waiting:
-                        progress(.waitingRemote(fraction: (done + 0.8) / total))
+                        progress(.waitingRemote(descriptor, fraction: (done + 0.8) / total))
+                    case let .retrying(attempt, of):
+                        progress(.retryingRemote(
+                            descriptor, attempt: attempt, of: of,
+                            fraction: (done + 0.8) / total
+                        ))
                     }
                 }
 
-                // Narrowed before the result is filed, exactly as the chunk loop does, so
-                // the second track and any re-run are keyed under the language the session
-                // turned out to be.
+                // Narrowed before the result is filed, exactly as the chunk loop does, so the
+                // batches after this one and any re-run are keyed under the language the
+                // session turned out to be.
                 if effective == .automatic, let detected = result.detectedLanguage {
                     effective = .fixed(detected)
                 }
 
-                // A whole track stored as chunk zero of its engine: the existing store,
-                // reused as-is, is what makes a crash after this line cost nothing.
+                // Filed the moment it lands. This one line is the whole point of the change:
+                // a server that goes quiet on batch three now costs batch three.
                 try await handle.writeChunkTranscript(ChunkTranscript(
-                    chunkIndex: 0,
-                    track: track,
+                    chunkIndex: batch.index,
+                    track: batch.track,
                     engineID: engine.id.rawValue,
                     localeIdentifier: effective.identifier,
                     chunkFingerprint: fingerprint,
                     generatedAt: Date(),
                     segments: result.segments
                 ))
-                trackSegments = result.segments
-                trackTurns = result.turns
+                batchSegments = result.segments
+                batchTurns = result.turns
             }
 
-            // What the model wrote over silence is dropped here rather than before the store,
-            // so the engine's own answer stays on disk and a re-run costs nothing. Judged a
-            // whole track at a time, which is the unit the filter reasons about.
-            let kept = HallucinationFilter.filtered(trackSegments)
-
-            // Track-relative times become session-absolute here, and only here, exactly as
-            // with chunks.
-            let offset = manifest.offset(for: track)
-            merged += kept.map { segment in
-                var shifted = segment
-                shifted.start += offset
-                shifted.end += offset
-                shifted.words = segment.words.map {
-                    TranscriptWord(text: $0.text, start: $0.start + offset, end: $0.end + offset)
-                }
-                return shifted
-            }
-            if track == .system {
-                systemTurns = trackTurns.map {
+            // Batch-relative times become session-absolute here, and only here. What is
+            // stored stays batch-relative, the same rule the chunk path follows.
+            //
+            // `sessionStart` adds where the batch begins within its track as well as the
+            // track's own alignment against the other one. For a batch that covers a whole
+            // track it reduces to exactly the track offset the previous version used, so an
+            // engine that still wants whole tracks lands on identical numbers.
+            let offset = manifest.sessionStart(of: batch.chunks[0], on: batch.track)
+            perTrack[batch.track, default: []] += batchSegments.map { Self.shift($0, by: offset) }
+            if batch.track == .system {
+                systemTurns += batchTurns.map {
                     SpeakerTurn(
                         speakerID: $0.speakerID,
                         start: $0.start + offset,
@@ -381,9 +535,16 @@ public actor TranscriptionPipeline {
                     )
                 }
             }
-            completed += 1
         }
 
+        // What the model wrote over silence is dropped here rather than before the store, so
+        // the engine's own answer stays on disk and a re-run costs nothing. Judged a whole
+        // track at a time even though it arrived in batches: the filter recognises a decoding
+        // loop by how often a line repeats, and a batch is too small a window to see one.
+        var merged: [TranscriptSegment] = []
+        for track in tracks {
+            merged += HallucinationFilter.filtered(perTrack[track] ?? [])
+        }
         merged.sort { $0.start < $1.start }
 
         let transcript = Transcript(
@@ -402,7 +563,7 @@ public actor TranscriptionPipeline {
                 diarizerID: engine.id.rawValue,
                 generatedAt: Date(),
                 audioFingerprint: Self.trackFingerprint(manifest.track(.system)),
-                turns: systemTurns
+                turns: systemTurns.sorted { $0.start < $1.start }
             )
             try await handle.writeDiarization(diarization)
             try await handle.setDiarizationInfo(DiarizationInfo(
@@ -420,6 +581,61 @@ public actor TranscriptionPipeline {
             manifest.resolvedLocaleIdentifier = localeIdentifier
         }
         return transcript
+    }
+
+    /// Moves one segment, and the words inside it, onto the session timeline.
+    private static func shift(
+        _ segment: TranscriptSegment, by offset: TimeInterval
+    ) -> TranscriptSegment {
+        var shifted = segment
+        shifted.start += offset
+        shifted.end += offset
+        shifted.words = segment.words.map {
+            TranscriptWord(text: $0.text, start: $0.start + offset, end: $0.end + offset)
+        }
+        return shifted
+    }
+
+    /// Produces one file holding exactly this batch's audio.
+    ///
+    /// Materialised lazily, per batch, only on a cache miss. Splitting the whole archive up
+    /// front the way the chunk path does would make a fully cached re-run pay a full decode
+    /// and a hundred megabytes of scratch to produce nothing.
+    private func batchAudio(
+        _ batch: UploadBatch,
+        manifest: SessionManifest,
+        layout: SessionLayout,
+        scratch: URL
+    ) throws -> URL {
+        let destination = scratch
+            .appending(path: "\(batch.track.filePrefix)-\(batch.index).m4a")
+
+        let onDisk = batch.chunks.filter {
+            FileManager.default.fileExists(atPath: layout.chunkURL($0).path)
+        }
+        if onDisk.count == batch.chunks.count {
+            try AudioArchiver.encode(
+                sources: onDisk.map(layout.chunkURL),
+                sampleRate: manifest.sampleRate,
+                to: destination
+            )
+            return destination
+        }
+
+        // The chunks have been archived away, so the batch is cut back out of the archive.
+        // `TrackInfo.chunks` survives archiving — `removeChunks` deletes files and never
+        // manifest entries — which is what makes the range known at all.
+        guard let archive = manifest.track(batch.track).archive else {
+            throw TranscriptionError.audioUnreadable(layout.archiveURL(track: batch.track))
+        }
+        let url = layout.audioDirectory.appending(path: archive.fileName)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw TranscriptionError.audioUnreadable(url)
+        }
+        try AudioArchiver.extract(
+            archive: url, range: batch.range, sampleRate: manifest.sampleRate, to: destination
+        )
+        return destination
     }
 
     /// Identifies a track's audio by its captured length.
