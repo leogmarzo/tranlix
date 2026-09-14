@@ -42,12 +42,17 @@ struct RootView: View {
             environment.pipeline?.onRunFinished = { Task { await library.refresh() } }
             // A finished recording goes straight into transcription, speakers and notes.
             // Nothing here asks the user to press three buttons in the right order.
-            recorder.onSessionFinished = { handle in
+            recorder.onSessionFinished = { handle, ending in
                 // The folder was named when the session was created, which is usually before
                 // there was a name at all. If one was typed while the class ran, the folder
                 // catches up once the chain lets go of it.
                 let needsFolderSync = recorder.titleChangedWhileRecording
-                environment.pipeline?.start(handle)
+                // Except a recording cut by the limit. Most likely nobody was there to stop it,
+                // and processing it anyway is how a forgotten recording becomes a bill. The
+                // audio is kept, and «Volver a transcribir» is there if it was wanted after all.
+                if ending == .finishedByUser {
+                    environment.pipeline?.start(handle)
+                }
                 Task {
                     if needsFolderSync {
                         library.markFolderOutOfSync(await handle.manifest.id)

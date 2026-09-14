@@ -11,7 +11,9 @@ struct TranslixApp: App {
     @Environment(\.openWindow) private var openWindow
 
     @State private var environment: AppEnvironment
-    @State private var settings = SettingsStore()
+
+    /// Built in `init` rather than inline, because the recorder reads the recording limit from it.
+    @State private var settings: SettingsStore
 
     /// Owned here rather than inside `RootView` because the menu bar item outlives the window
     /// and has to read the same session state the record screen does.
@@ -21,8 +23,10 @@ struct TranslixApp: App {
 
     init() {
         let environment = AppEnvironment()
-        let recorder = RecorderViewModel(environment: environment)
+        let settings = SettingsStore()
+        let recorder = RecorderViewModel(environment: environment, settings: settings)
         _environment = State(wrappedValue: environment)
+        _settings = State(wrappedValue: settings)
         _recorder = State(wrappedValue: recorder)
         _menuBar = State(wrappedValue: MenuBarController(
             recorder: recorder, navigation: environment.navigation

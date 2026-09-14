@@ -53,10 +53,34 @@ final class SettingsStore {
         }
     }
 
+    /// Hours of recorded audio after which a recording ends on its own. Nil for never.
+    ///
+    /// On by default, because what it prevents fails silently: a recording nobody stopped once
+    /// ran from a Friday night to a Monday morning. A session cut this way is not processed —
+    /// that is the app's rule, not this setting's.
+    var recordingLimitHours: Int? {
+        didSet {
+            guard recordingLimitHours != oldValue else { return }
+            // Zero stands for "never": `UserDefaults` cannot hold a nil.
+            UserDefaults.standard.set(recordingLimitHours ?? 0, forKey: Self.recordingLimitKey)
+        }
+    }
+
+    /// The limits offered, in hours.
+    static let recordingLimitOptions = [1, 2, 3, 4, 6, 8, 12]
+
+    static let defaultRecordingLimitHours = 4
+
+    /// The limit in the seconds the recorder counts in.
+    var recordingLimit: TimeInterval? {
+        recordingLimitHours.map { TimeInterval($0) * 3600 }
+    }
+
     private static let key = "transcriptionSettings"
     private static let summaryModelKey = "summaryModel"
     private static let templateIDsKey = "notesTemplateIDs"
     private static let notesLanguageKey = "notesLanguage"
+    private static let recordingLimitKey = "recordingLimitHours"
 
     /// The one-template-for-everything preference, read only to migrate it.
     private static let legacyTemplateKey = "defaultTemplateID"
@@ -71,6 +95,15 @@ final class SettingsStore {
         notesLanguage = UserDefaults.standard.string(forKey: Self.notesLanguageKey)
             .flatMap(NotesLanguage.init(rawValue:)) ?? .default
         templateIDs = Self.loadTemplateIDs()
+        recordingLimitHours = Self.loadRecordingLimitHours()
+    }
+
+    /// A Mac that never chose gets the default; one that chose "never" stored a zero.
+    private static func loadRecordingLimitHours() -> Int? {
+        guard let stored = UserDefaults.standard.object(forKey: recordingLimitKey) as? Int else {
+            return defaultRecordingLimitHours
+        }
+        return stored > 0 ? stored : nil
     }
 
     private static func loadTemplateIDs() -> [SessionKind: UUID] {

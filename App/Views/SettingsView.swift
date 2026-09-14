@@ -11,7 +11,7 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
-            GeneralSettings(environment: environment)
+            GeneralSettings(environment: environment, settings: settings)
                 .tabItem { Label("General", systemImage: "gearshape") }
             TranscriptionSettingsPane(environment: environment, settings: settings)
                 .tabItem { Label("Transcripción", systemImage: "text.bubble") }
@@ -29,6 +29,7 @@ struct SettingsView: View {
 
 private struct GeneralSettings: View {
     @Bindable var environment: AppEnvironment
+    @Bindable var settings: SettingsStore
     @State private var availableSpace = "—"
 
     var body: some View {
@@ -45,6 +46,18 @@ private struct GeneralSettings: View {
                 }
                 LabeledContent("Espacio libre", value: availableSpace)
                 Text("Cada hora grabada ocupa unos 230 MB mientras se procesa, y unos 30 MB una vez comprimida.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Grabación") {
+                Picker("Cortar automáticamente", selection: $settings.recordingLimitHours) {
+                    ForEach(SettingsStore.recordingLimitOptions, id: \.self) { hours in
+                        Text("Después de \(hours) h").tag(Int?.some(hours))
+                    }
+                    Text("Nunca").tag(Int?.none)
+                }
+                Text("Cuenta el tiempo grabado, sin las pausas. Al llegar al límite la grabación termina y no se procesa: si la querés, la transcribís desde la sesión. El cambio vale desde la próxima grabación.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

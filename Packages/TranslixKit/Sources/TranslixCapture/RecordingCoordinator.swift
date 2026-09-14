@@ -25,6 +25,14 @@ public enum RecordingEvent: Sendable, Equatable {
     case resumed(pausedFor: TimeInterval)
 
     case stopped(URL)
+
+    /// The session held as much audio as it was allowed and was ended here, not by anyone
+    /// pressing anything. Sent after `.stopped`.
+    ///
+    /// `failure` says why the manifest could not be marked `recorded`, when it could not.
+    /// Capture has ended either way, and a session left in `recording` is offered for recovery
+    /// at the next launch.
+    case durationLimitReached(limit: TimeInterval, failure: String?)
 }
 
 public struct RecordingConfiguration: Sendable {
@@ -63,6 +71,12 @@ public struct RecordingConfiguration: Sendable {
     /// clear the track is not coming straight back, ask far less often.
     public var unrecoverableRetryEvery: Int = 12
 
+    /// How often the recorded length is compared with the session's limit, when it has one.
+    ///
+    /// Limits are set in hours, so overshooting by a second costs nothing, and checking more
+    /// often would only wake the actor for no reason.
+    public var limitCheckInterval: TimeInterval = 1
+
     public init() {}
 }
 
@@ -95,6 +109,10 @@ public actor RecordingCoordinator {
     private var activity: (any NSObjectProtocol)?
     private var diskCheck: Task<Void, Never>?
     private var livenessCheck: Task<Void, Never>?
+    private var limitCheck: Task<Void, Never>?
+
+    /// How much audio the running session may hold before it ends on its own. Nil for no limit.
+    private var maxDuration: TimeInterval?
 
     /// Frames each track had at the previous liveness check.
     private var lastObservedFrames: [AudioTrack: Int64] = [:]
@@ -143,10 +161,14 @@ public actor RecordingCoordinator {
     /// failure the rest of this design cannot recover from. If one track fails to start the
     /// other keeps going — half a recording beats none, and the manifest records which track
     /// is missing.
+    ///
+    /// `maxDuration` is how much audio the session may hold before it ends on its own, counted
+    /// the way `elapsed()` counts. Nil means it runs until someone finishes it.
     @discardableResult
     public func start(
         title: String,
         language: SessionLanguage,
+        maxDuration: TimeInterval? = nil,
         now: Date
     ) async throws -> SessionHandle {
         guard !isRecording else { throw CaptureError.engineFailed("ya hay una grabación en curso") }
@@ -160,6 +182,7 @@ public actor RecordingCoordinator {
             now: now
         )
         self.handle = handle
+        self.maxDuration = maxDuration
         isRecording = true
 
         let layout = await handle.layout
@@ -187,6 +210,7 @@ public actor RecordingCoordinator {
         preventSleep()
         startDiskMonitor()
         startLivenessMonitor()
+        startLimitMonitor()
         emit(.started(layout.root))
         return handle
     }
@@ -536,6 +560,53 @@ public actor RecordingCoordinator {
         }
     }
 
+    // MARK: - Limit
+
+    /// Ends the session once it holds as much audio as it was allowed.
+    ///
+    /// For the recording nobody remembered to stop. One ran from a Friday night to a Monday
+    /// morning, and finishing it would have sent thirty-seven hours of audio to be transcribed.
+    /// Measured with `elapsed()`, in recorded audio rather than by the wall clock: recorded audio
+    /// is what fills the disk and what transcription is billed on, and a pause adds to neither.
+    private func startLimitMonitor() {
+        let interval = configuration.limitCheckInterval
+        guard maxDuration != nil, interval > 0 else { return }
+        limitCheck = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(interval))
+                guard !Task.isCancelled else { return }
+                let ended = await self?.enforceLimit() ?? true
+                if ended { return }
+            }
+        }
+    }
+
+    /// Stops the session if it has reached its limit.
+    ///
+    /// Through `stop`, so a session cut here is left exactly as one finished by hand. What to do
+    /// with it next is the app's decision, which is why the cut is reported rather than left to
+    /// be inferred from `.stopped`.
+    ///
+    /// - Returns: whether the session is over, by this or by anything else.
+    private func enforceLimit() async -> Bool {
+        guard isRecording else { return true }
+        guard let maxDuration, await elapsed() >= maxDuration else { return false }
+        // Measuring suspends, and a session finished by hand in the meantime was not cut.
+        guard isRecording else { return true }
+
+        // `stop` cancels the monitors, and this runs on one of them. Letting go of it first keeps
+        // the stop off a cancelled task; the loop ends as soon as this returns.
+        limitCheck = nil
+        var failure: String?
+        do {
+            try await stop()
+        } catch {
+            failure = error.localizedDescription
+        }
+        emit(.durationLimitReached(limit: maxDuration, failure: failure))
+        return true
+    }
+
     private func startDiskMonitor() {
         let interval = configuration.diskCheckInterval
         let store = store
@@ -570,7 +641,8 @@ public actor RecordingCoordinator {
     /// Works the same whether the session was running or paused, and is deliberately the only
     /// thing that ends one: the stop button pauses, so finishing always takes a second,
     /// separate decision. Losing a class to a misplaced click is the failure this whole design
-    /// exists to prevent.
+    /// exists to prevent. The one session that ends without that decision is one cut by its
+    /// recording limit, and it is ended through here too.
     ///
     /// Each recorder drains synchronously, so by the time this returns the manifest describes
     /// every sample that reached the disk.
@@ -633,6 +705,8 @@ public actor RecordingCoordinator {
         diskCheck = nil
         livenessCheck?.cancel()
         livenessCheck = nil
+        limitCheck?.cancel()
+        limitCheck = nil
         lastObservedFrames.removeAll()
         stallCounts.removeAll()
         lostTracks.removeAll()

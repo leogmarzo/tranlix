@@ -96,6 +96,7 @@ final class RecorderViewModel {
     private(set) var markers: [(offset: TimeInterval, label: String)] = []
 
     private let environment: AppEnvironment
+    private let settings: SettingsStore
     private var pollTask: Task<Void, Never>?
     private var eventTask: Task<Void, Never>?
 
@@ -104,15 +105,26 @@ final class RecorderViewModel {
     private var notesSaveTask: Task<Void, Never>?
     private var titleSaveTask: Task<Void, Never>?
 
-    /// Called after a session finishes, with the session that finished.
+    /// How a session came to an end.
+    enum Ending: Equatable {
+        /// Finalizar, pressed by someone who wants the recording.
+        case finishedByUser
+
+        /// Cut by the recording limit. Most likely nobody was there.
+        case cutAtLimit
+    }
+
+    /// Called after a session finishes, with the session that finished and how it ended.
     ///
     /// It carries the handle because the only useful thing to do with a finished recording is
     /// process it, and that needs to know *which* one. Taking no argument meant the app's only
-    /// possible response was to rescan the folder.
-    var onSessionFinished: ((SessionHandle) -> Void)?
+    /// possible response was to rescan the folder. It carries the ending because a recording
+    /// cut by the limit is the one finished recording that must not be processed on its own.
+    var onSessionFinished: ((SessionHandle, Ending) -> Void)?
 
-    init(environment: AppEnvironment) {
+    init(environment: AppEnvironment, settings: SettingsStore) {
         self.environment = environment
+        self.settings = settings
     }
 
     var canRecord: Bool { !isRecording && !isBusy }
@@ -150,7 +162,13 @@ final class RecorderViewModel {
         observeEvents(of: coordinator)
 
         do {
-            handle = try await coordinator.start(title: title, language: language, now: Date())
+            handle = try await coordinator.start(
+                title: title,
+                language: language,
+                // Read once, here: a limit changed mid-recording applies from the next one.
+                maxDuration: settings.recordingLimit,
+                now: Date()
+            )
             isRecording = true
             isPaused = false
             startPolling(coordinator)
@@ -207,17 +225,7 @@ final class RecorderViewModel {
 
         pollTask?.cancel()
         pollTask = nil
-
-        // Flushed rather than left to the debounce: the last thing typed is often the most
-        // important, and the chain reads both of these moments from now.
-        titleSaveTask?.cancel()
-        notesSaveTask?.cancel()
-        if let handle {
-            try? await handle.setTitle(title)
-            if !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                try? await handle.writeUserNotes(notes)
-            }
-        }
+        await saveTypedText()
 
         var finished: SessionHandle?
         do {
@@ -226,6 +234,52 @@ final class RecorderViewModel {
             errorMessage = error.localizedDescription
         }
 
+        wrapUp()
+        if let finished { onSessionFinished?(finished, .finishedByUser) }
+    }
+
+    /// Closes the screen on a session the coordinator ended by itself at the recording limit.
+    ///
+    /// Capture is already over and the session already `recorded`; what is left is everything
+    /// `finish` does after the stop, and a notice saying why the recording is no longer running.
+    private func endAtLimit(_ limit: TimeInterval, failure: String?) async {
+        guard isRecording, let ended = handle else { return }
+        isBusy = true
+        defer { isBusy = false }
+
+        pollTask?.cancel()
+        pollTask = nil
+        // After the stop rather than before it, unlike `finish`. The handle outlives capture,
+        // and the only reader that needs these first is the chain, which is not going to start.
+        await saveTypedText()
+
+        wrapUp()
+        let hours = Int((limit / 3600).rounded())
+        notices.append(Notice(
+            text: "La grabación se cortó sola al llegar a \(hours) h y no se procesó. Si la querés, abrila y usá «Volver a transcribir».",
+            isSevere: true
+        ))
+        if let failure {
+            errorMessage = failure
+            return
+        }
+        onSessionFinished?(ended, .cutAtLimit)
+    }
+
+    /// Flushed rather than left to the debounce: the last thing typed is often the most
+    /// important, and the chain reads both of these moments from now.
+    private func saveTypedText() async {
+        titleSaveTask?.cancel()
+        notesSaveTask?.cancel()
+        guard let handle else { return }
+        try? await handle.setTitle(title)
+        if !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            try? await handle.writeUserNotes(notes)
+        }
+    }
+
+    /// Puts the screen back to not recording, once capture is over, however it ended.
+    private func wrapUp() {
         isRecording = false
         isPaused = false
         levels = [:]
@@ -234,7 +288,6 @@ final class RecorderViewModel {
         eventTask = nil
         handle = nil
         title = ""
-        if let finished { onSessionFinished?(finished) }
     }
 
     /// Drops a marker, with a title when there is one.
@@ -353,6 +406,9 @@ final class RecorderViewModel {
             break
         case let .stopped(folder):
             lastSessionFolder = folder
+        case let .durationLimitReached(limit, failure):
+            // Its own task: closing the screen cancels the one delivering this event.
+            Task { [weak self] in await self?.endAtLimit(limit, failure: failure) }
         }
     }
 
