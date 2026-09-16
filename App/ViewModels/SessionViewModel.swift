@@ -209,6 +209,35 @@ final class SessionViewModel {
         }
     }
 
+    /// Changes the language a *recorded* session will be transcribed in.
+    ///
+    /// Detection is a guess made from audio, and the audio it is made from is sometimes a
+    /// person listening in silence. When it guesses wrong the recording is not lost — the
+    /// tracks are still on disk — but nothing in the app could say so until now, and the only
+    /// recourse was to re-run and hope the second guess landed better.
+    ///
+    /// Whatever an earlier run resolved to goes with it: the user saying "this was English"
+    /// is the user saying the stored answer was wrong, so leaving it to stand in on a later
+    /// `auto` would be keeping the thing they just corrected.
+    func setLanguage(_ language: SessionLanguage) {
+        guard !isProcessing, language != manifest?.language else { return }
+        Task {
+            guard let handle = try? environment.store.handle(at: summary.layout.root) else {
+                return
+            }
+            do {
+                try await handle.update { manifest in
+                    manifest.language = language
+                    manifest.resolvedLocaleIdentifier = nil
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
+            await reload()
+        }
+    }
+
     private func run(
         stages: Set<PipelineStage>,
         force: Bool = false,

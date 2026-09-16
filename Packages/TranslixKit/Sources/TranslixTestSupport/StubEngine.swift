@@ -29,13 +29,19 @@ public actor StubEngine: TranscriptionEngine {
     /// Makes each chunk take long enough that a test can cancel partway through one.
     private let delayPerChunk: Duration?
 
+    /// Stands in for the canned two segments when a test needs a chunk to come back with
+    /// something specific — the hundred thank-yous a chunk of silence decodes into, say,
+    /// rather than the two tidy lines the default returns.
+    private let segmentsForChunk: (@Sendable (URL, AudioTrack) -> [TranscriptSegment])?
+
     public init(
         id: EngineID = EngineID(rawValue: "stub"),
         availability: EngineAvailability = .ready,
         failAfter: Int? = nil,
         delayPerChunk: Duration? = nil,
         detectedLanguage: String? = nil,
-        textForChunk: @escaping @Sendable (URL) -> String = { $0.deletingPathExtension().lastPathComponent }
+        textForChunk: @escaping @Sendable (URL) -> String = { $0.deletingPathExtension().lastPathComponent },
+        segmentsForChunk: (@Sendable (URL, AudioTrack) -> [TranscriptSegment])? = nil
     ) {
         self.id = id
         self.availability = availability
@@ -43,6 +49,7 @@ public actor StubEngine: TranscriptionEngine {
         self.delayPerChunk = delayPerChunk
         self.detectedLanguage = detectedLanguage
         self.textForChunk = textForChunk
+        self.segmentsForChunk = segmentsForChunk
     }
 
     public var transcribeCallCount: Int { transcribedChunks.count }
@@ -80,6 +87,13 @@ public actor StubEngine: TranscriptionEngine {
             throw TranscriptionError.engineFailed("stub falló a propósito")
         }
         transcribedChunks.append(url)
+
+        if let segmentsForChunk {
+            return EngineTranscription(
+                segments: segmentsForChunk(url, track),
+                detectedLanguage: language == .automatic ? detectedLanguage : nil
+            )
+        }
 
         // Two segments per chunk, at fixed chunk-relative times, so a test can check exactly
         // where they land on the session timeline.

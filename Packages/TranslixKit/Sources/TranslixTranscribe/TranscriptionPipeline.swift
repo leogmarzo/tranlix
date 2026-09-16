@@ -168,7 +168,10 @@ public actor TranscriptionPipeline {
         // requested — reusable, and it lets an engine that cannot detect re-run a session
         // whose language another engine already worked out.
         var effective = language
-        if language == .automatic, let resolved = await handle.manifest.resolvedLocaleIdentifier {
+        if language == .automatic,
+           let resolved = ResolvedLanguage.supported(
+               await handle.manifest.resolvedLocaleIdentifier
+           ) {
             effective = .fixed(resolved)
         }
 
@@ -239,7 +242,14 @@ public actor TranscriptionPipeline {
                 // language it turned out to be rather than under the request that had none.
                 // Otherwise the next run would resolve the language, miss on every cached
                 // chunk, and transcribe the whole session again.
-                if effective == .automatic, let detected = result.detectedLanguage {
+                //
+                // Only a guess worth believing narrows it. A chunk that decoded silence, or
+                // one that named a language the app does not support, leaves the run
+                // automatic so the next chunk gets to answer instead.
+                if effective == .automatic,
+                   let detected = ResolvedLanguage.pinnable(
+                       detected: result.detectedLanguage, from: chunkSegments
+                   ) {
                     effective = .fixed(detected)
                 }
 
@@ -496,8 +506,14 @@ public actor TranscriptionPipeline {
 
                 // Narrowed before the result is filed, exactly as the chunk loop does, so the
                 // batches after this one and any re-run are keyed under the language the
-                // session turned out to be.
-                if effective == .automatic, let detected = result.detectedLanguage {
+                // session turned out to be — and, exactly as the chunk loop does, only when
+                // the batch is worth believing. This is the line that pinned a meeting to
+                // Ukrainian because the microphone track happened to go first and happened to
+                // be a person listening in silence.
+                if effective == .automatic,
+                   let detected = ResolvedLanguage.pinnable(
+                       detected: result.detectedLanguage, from: result.segments
+                   ) {
                     effective = .fixed(detected)
                 }
 

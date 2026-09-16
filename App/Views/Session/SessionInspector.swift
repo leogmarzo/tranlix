@@ -66,8 +66,20 @@ struct SessionInspector: View {
         section("Transcripción") {
             LabeledContent("Motor", value: engineName)
                 .font(.caption)
-            LabeledContent("Idioma", value: manifest.language.displayName)
-                .font(.caption)
+            // A picker rather than a label, because what it shows can be wrong. The language
+            // is detected from audio, and a microphone that recorded a listener gets read as
+            // confidently as one that recorded speech — so this is where a session that came
+            // back in the wrong language is put right before it is transcribed again.
+            Picker("Idioma", selection: Binding(
+                get: { manifest.language },
+                set: { model.setLanguage($0) }
+            )) {
+                ForEach([SessionLanguage.auto, .spanish, .english], id: \.self) { language in
+                    Text(language.displayName).tag(language)
+                }
+            }
+            .font(.caption)
+            .disabled(model.isProcessing)
             if let transcript = model.transcript {
                 LabeledContent("Segmentos", value: "\(transcript.segments.count)")
                     .font(.caption)

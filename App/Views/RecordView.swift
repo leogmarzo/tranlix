@@ -66,6 +66,40 @@ struct RecordView: View {
             Text("El nombre se puede poner ahora o después. Grabar no espera a nadie.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            languagePicker
+                .padding(.top, 8)
+        }
+    }
+
+    /// The one thing that does have to be decided before the button, and the only escape from
+    /// a detection that goes wrong.
+    ///
+    /// "Auto" is still the default and still right most of the time. But detection runs on
+    /// audio, and the microphone track of a meeting you mostly listen to is a person breathing
+    /// — which Whisper reads as a language as confidently as it reads speech. The pipeline
+    /// refuses an answer that is neither Spanish nor English, so the damage is bounded now;
+    /// this is what makes it impossible.
+    ///
+    /// Frozen once capture starts: the language is written into the manifest when the session
+    /// folder is created, and the model is already warming up for it.
+    private var languagePicker: some View {
+        HStack(spacing: 10) {
+            Picker("Idioma", selection: $model.language) {
+                ForEach([SessionLanguage.auto, .spanish, .english], id: \.self) { language in
+                    Text(language.displayName).tag(language)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 240)
+            .disabled(model.isRecording)
+
+            Text(model.isRecording
+                ? "El idioma queda fijado al empezar."
+                : "Elegirlo evita que un micrófono en silencio decida por la reunión.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

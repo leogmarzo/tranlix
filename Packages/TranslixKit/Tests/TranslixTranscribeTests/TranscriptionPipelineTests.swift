@@ -567,6 +567,79 @@ struct TranscriptionPipelineTests {
         }
     }
 
+    @Test("a language the app does not support never pins the run")
+    func unsupportedDetectionNeverPins() async throws {
+        // 2026-09-15. Whisper read a microphone that had recorded a listener as Ukrainian,
+        // the first chunk pinned the session to `uk`, and a meeting held in English came back
+        // in Cyrillic. The app offers Spanish and English; a third answer is a misread.
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(detectedLanguage: "uk")
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: .automatic, progress: { _ in }
+            )
+
+            #expect(await engine.requestedLanguages.allSatisfy { $0 == .automatic })
+            #expect(await handle.manifest.resolvedLocaleIdentifier == nil)
+        }
+    }
+
+    @Test("a chunk that decoded silence does not get to name the language")
+    func decodedSilenceNeverPins() async throws {
+        // The other half of the same failure: even a supported language is only a guess when
+        // the audio held nothing. A chunk of thank-yous names whatever the model's subtitle
+        // training data ends with, not what the session is in.
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(
+                detectedLanguage: "en",
+                segmentsForChunk: { url, track in
+                    guard url.lastPathComponent.contains("mic") else {
+                        return [TranscriptSegment(
+                            track: track, start: 0, end: 1, text: "Bueno, arrancamos."
+                        )]
+                    }
+                    return (0 ..< 10).map { index in
+                        TranscriptSegment(
+                            track: track, start: Double(index), end: Double(index) + 1,
+                            text: "Thank you."
+                        )
+                    }
+                }
+            )
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: .automatic, progress: { _ in }
+            )
+
+            // Both mic chunks stayed automatic; the system chunk, which held speech, is the
+            // one that settled it.
+            #expect(
+                await engine.requestedLanguages == [.automatic, .automatic, .automatic]
+            )
+            #expect(await handle.manifest.resolvedLocaleIdentifier == "en")
+        }
+    }
+
+    @Test("a language an earlier run resolved to is ignored when the app cannot support it")
+    func unsupportedStandInIsIgnored() async throws {
+        // Sessions transcribed before the guard existed carry `uk` in their manifest. Honouring
+        // it would re-pin every re-run to the wrong language for the life of the recording.
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            try await handle.update { $0.resolvedLocaleIdentifier = "uk" }
+            let engine = StubEngine(detectedLanguage: "en")
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: .automatic, progress: { _ in }
+            )
+
+            #expect(await engine.requestedLanguages.first == .automatic)
+            #expect(await handle.manifest.resolvedLocaleIdentifier == "en")
+        }
+    }
+
     @Test("an engine that cannot work out the language leaves it unresolved")
     func undetectedLanguageStaysAutomatic() async throws {
         try await withTemporaryRoot { root in

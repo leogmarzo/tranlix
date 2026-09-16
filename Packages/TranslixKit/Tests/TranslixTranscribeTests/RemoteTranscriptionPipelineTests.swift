@@ -236,6 +236,57 @@ struct RemoteTranscriptionPipelineTests {
         }
     }
 
+    @Test("a track read as an unsupported language leaves the next one free to answer")
+    func unsupportedDetectionDoesNotPinTheOtherTrack() async throws {
+        // The session that produced this test: the microphone went first, held a person
+        // listening in silence, and came back from Whisper as Ukrainian. That answer became
+        // the language the *system* track — the meeting itself, in English — was told to
+        // decode, and the transcript came back in Cyrillic.
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubTrackEngine(
+                detectedLanguageForTrack: { $0 == .mic ? "uk" : "en" }
+            )
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: .automatic, progress: { _ in }
+            )
+
+            #expect(await engine.requestedLanguages == [.automatic, .automatic])
+            #expect(await handle.manifest.resolvedLocaleIdentifier == "en")
+        }
+    }
+
+    @Test("a batch that decoded silence does not get to name the language")
+    func decodedSilenceDoesNotPin() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubTrackEngine(
+                detectedLanguage: "en",
+                segmentsForTrack: { track in
+                    guard track == .mic else {
+                        return [TranscriptSegment(
+                            track: track, start: 0, end: 1, text: "Bueno, arrancamos."
+                        )]
+                    }
+                    return (0 ..< 10).map { index in
+                        TranscriptSegment(
+                            track: track, start: Double(index), end: Double(index) + 1,
+                            text: "Дякую!"
+                        )
+                    }
+                }
+            )
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: .automatic, progress: { _ in }
+            )
+
+            #expect(await engine.requestedLanguages == [.automatic, .automatic])
+            #expect(await handle.manifest.resolvedLocaleIdentifier == "en")
+        }
+    }
+
     // MARK: - Progress
 
     @Test("the strip narrates preparing, uploading and the wait, in an order that ascends")

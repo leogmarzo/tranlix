@@ -34,6 +34,11 @@ public actor StubTrackEngine: TrackTranscribing {
     private var failAfter: Int?
     private let detectedLanguage: String?
 
+    /// What the engine claims per track, when a test needs the two tracks to disagree — a
+    /// microphone read as Ukrainian while the other track holds the meeting, which is the
+    /// shape of the bug that made any of this necessary.
+    private let detectedLanguageForTrack: (@Sendable (AudioTrack) -> String?)?
+
     /// Makes each track take long enough that a test can cancel partway through one.
     private let delayPerTrack: Duration?
 
@@ -48,6 +53,7 @@ public actor StubTrackEngine: TrackTranscribing {
         failAfter: Int? = nil,
         delayPerTrack: Duration? = nil,
         detectedLanguage: String? = nil,
+        detectedLanguageForTrack: (@Sendable (AudioTrack) -> String?)? = nil,
         separatesSpeakers: Bool = true,
         maxUploadSeconds: Double? = nil,
         segmentsForTrack: (@Sendable (AudioTrack) -> [TranscriptSegment])? = nil
@@ -58,11 +64,17 @@ public actor StubTrackEngine: TrackTranscribing {
         self.failAfter = failAfter
         self.delayPerTrack = delayPerTrack
         self.detectedLanguage = detectedLanguage
+        self.detectedLanguageForTrack = detectedLanguageForTrack
         self.separatesSpeakers = separatesSpeakers
         self.segmentsForTrack = segmentsForTrack
     }
 
     public var trackCallCount: Int { transcribedTracks.count }
+
+    /// What this engine says it heard on a track.
+    private func claim(for track: AudioTrack) -> String? {
+        detectedLanguageForTrack?(track) ?? detectedLanguage
+    }
 
     public func setFailAfter(_ value: Int?) {
         failAfter = value
@@ -109,7 +121,7 @@ public actor StubTrackEngine: TrackTranscribing {
             return TrackTranscription(
                 segments: segmentsForTrack(track),
                 turns: [],
-                detectedLanguage: language == .automatic ? detectedLanguage : nil
+                detectedLanguage: language == .automatic ? claim(for: track) : nil
             )
         }
 
@@ -128,7 +140,7 @@ public actor StubTrackEngine: TrackTranscribing {
                     ),
                 ],
                 turns: [],
-                detectedLanguage: language == .automatic ? detectedLanguage : nil
+                detectedLanguage: language == .automatic ? claim(for: track) : nil
             )
         case .system where !separatesSpeakers:
             // A transcribe-only engine: words, no speakers, no turns.
@@ -140,7 +152,7 @@ public actor StubTrackEngine: TrackTranscribing {
                     ),
                 ],
                 turns: [],
-                detectedLanguage: language == .automatic ? detectedLanguage : nil
+                detectedLanguage: language == .automatic ? claim(for: track) : nil
             )
         case .system:
             return TrackTranscription(
@@ -166,7 +178,7 @@ public actor StubTrackEngine: TrackTranscribing {
                         start: 2, end: 3, confidence: 0.6
                     ),
                 ],
-                detectedLanguage: language == .automatic ? detectedLanguage : nil
+                detectedLanguage: language == .automatic ? claim(for: track) : nil
             )
         }
     }

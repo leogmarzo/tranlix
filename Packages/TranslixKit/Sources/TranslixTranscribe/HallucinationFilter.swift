@@ -67,10 +67,47 @@ public enum HallucinationFilter {
         return segments.filter { !dropped.contains($0.id) }
     }
 
+    /// Whether this run of segments is a decoding loop over silence rather than speech.
+    ///
+    /// The same measurement the filter already makes to decide a track is dead, exposed
+    /// because it answers a second question: whether what came back is worth believing about
+    /// the *language* of the audio. Whisper names a language for silence as confidently as it
+    /// names one for speech, and on 2026-09-15 a microphone that had recorded a listener was
+    /// read as Ukrainian and pinned a whole meeting to it.
+    ///
+    /// Empty counts as silence. There is no evidence in nothing.
+    public static func isDecodedSilence(_ segments: [TranscriptSegment]) -> Bool {
+        guard !segments.isEmpty else { return true }
+        let looping = repetitionDropIDs(in: segments)
+        return Double(looping.count) / Double(segments.count) >= deadTrackShare
+    }
+
     /// What to remove from one track.
     private static func dropIDs(in segments: [TranscriptSegment]) -> Set<UUID> {
         guard !segments.isEmpty else { return [] }
 
+        var dropped = repetitionDropIDs(in: segments)
+
+        // A track the repetition rule gutted was decoding silence, not speech. The rest of
+        // Whisper's silence vocabulary appears there too, a few times each — too rarely for
+        // the repetition rule and unmistakable in this company.
+        guard Double(dropped.count) / Double(segments.count) >= deadTrackShare else {
+            return dropped
+        }
+
+        let normalised = segments.map { normalise($0.text) }
+        for (index, segment) in segments.enumerated() {
+            // Punctuation on its own — a segment whose whole text was "." or "-" — normalises
+            // to nothing. It carries no words, and it only ever turns up in this company.
+            if normalised[index].isEmpty || fillers.contains(normalised[index]) {
+                dropped.insert(segment.id)
+            }
+        }
+        return dropped
+    }
+
+    /// The segments a short phrase repeated often enough to read as a loop.
+    private static func repetitionDropIDs(in segments: [TranscriptSegment]) -> Set<UUID> {
         let normalised = segments.map { normalise($0.text) }
         var counts: [String: Int] = [:]
         for text in normalised where !text.isEmpty {
@@ -83,21 +120,6 @@ public enum HallucinationFilter {
             guard !text.isEmpty else { continue }
             if text.split(separator: " ").count <= fillerWordLimit,
                counts[text, default: 0] >= repetitionThreshold {
-                dropped.insert(segment.id)
-            }
-        }
-
-        // A track the loop above gutted was decoding silence, not speech. The rest of
-        // Whisper's silence vocabulary appears there too, a few times each — too rarely for
-        // the repetition rule and unmistakable in this company.
-        guard Double(dropped.count) / Double(segments.count) >= deadTrackShare else {
-            return dropped
-        }
-
-        for (index, segment) in segments.enumerated() {
-            // Punctuation on its own — a segment whose whole text was "." or "-" — normalises
-            // to nothing. It carries no words, and it only ever turns up in this company.
-            if normalised[index].isEmpty || fillers.contains(normalised[index]) {
                 dropped.insert(segment.id)
             }
         }
