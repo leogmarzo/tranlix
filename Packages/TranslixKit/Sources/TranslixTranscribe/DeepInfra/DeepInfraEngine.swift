@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import TranslixModel
 
 /// Whisper `large-v3` running on DeepInfra's servers.
@@ -30,14 +31,11 @@ public actor DeepInfraEngine: TrackTranscribing {
 
     public static let defaultBaseURL = URL(string: "https://api.deepinfra.com")!
 
-    /// Ten minutes of audio per request, about 2.4 MB at the archiver's bitrate.
-    ///
-    /// Short enough that losing one costs ten minutes rather than a meeting, long enough that
-    /// an hour-long session is six requests per track rather than twelve. It also bounds the
-    /// job on their side, which matters more than it looks: word-level alignment over
-    /// twenty-four minutes is a long serial piece of work, and the failure it produced was a
-    /// handler that never finished rather than a network that broke.
-    public static let defaultMaxUploadSeconds: Double = 600
+    /// One capture chunk per request. Ten-minute requests repeatedly timed out after
+    /// uploading, so new work uses five minutes while the pipeline retains larger caches.
+    public static let defaultMaxUploadSeconds: Double = 300
+
+    private static let logger = Logger(subsystem: "com.leomarzo.tranlix", category: "DeepInfra")
 
     /// Four minutes without a byte from them.
     ///
@@ -152,6 +150,7 @@ public actor DeepInfraEngine: TrackTranscribing {
             ) { attempt in
                 try await self.send(
                     envelope: envelope,
+                    batchName: trackFile.lastPathComponent,
                     contentType: body.contentType,
                     key: key,
                     attempt: attempt,
@@ -172,11 +171,15 @@ public actor DeepInfraEngine: TrackTranscribing {
 
     private func send(
         envelope: URL,
+        batchName: String,
         contentType: String,
         key: String,
         attempt: Int,
         progress: @escaping @Sendable (TrackTranscriptionPhase) -> Void
     ) async throws -> DeepInfraTranscription {
+        let diagnosticID = UUID().uuidString
+        let started = Date()
+        Self.logger.notice("Request \(diagnosticID, privacy: .public) model=\(self.model, privacy: .public) batch=\(batchName, privacy: .private) attempt=\(attempt)")
         var request = URLRequest(url: baseURL.appending(path: "v1/inference/\(model)"))
         request.httpMethod = "POST"
         // Their own examples spell it lowercase; the header name is case-insensitive but the
@@ -203,10 +206,15 @@ public actor DeepInfraEngine: TrackTranscribing {
                 for: request, fromFile: envelope, delegate: delegate
             )
         } catch {
+            let code = (error as NSError).code
+            let elapsed = Date().timeIntervalSince(started)
+            Self.logger.error("Request \(diagnosticID, privacy: .public) failed code=\(code) elapsed=\(elapsed) uploaded=\(delegate.bodyFullySent)")
             throw RemoteRetry.classify(error, bodyFullySent: delegate.bodyFullySent)
         }
 
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let elapsed = Date().timeIntervalSince(started)
+        Self.logger.notice("Request \(diagnosticID, privacy: .public) response status=\(status) elapsed=\(elapsed) uploaded=\(delegate.bodyFullySent)")
         guard (200 ..< 300).contains(status) else {
             if status == 401 || status == 403 {
                 // Thrown past the retry policy on purpose: a key they have already refused is

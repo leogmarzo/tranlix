@@ -428,15 +428,54 @@ public actor TranscriptionPipeline {
             }
         }
 
-        // Planned from the manifest alone — pure arithmetic, no disk. That is what lets the
-        // strip say "bloque 3 de 12" from the first second, and what keeps a fully cached
-        // re-run from decoding a single frame of audio.
-        let plan = tracks.filter { !alreadyWhole.contains($0) }.flatMap { track in
-            Self.batches(
-                chunks: manifest.track(track).chunks,
-                sampleRate: manifest.sampleRate,
-                maxSeconds: remote.maxUploadSeconds
-            ).map { UploadBatch(track: track, chunks: $0) }
+        // Honor cached frame ranges before applying the current upload ceiling. A smaller
+        // ceiling must not invalidate completed requests from an earlier version.
+        var plan: [UploadBatch] = []
+        for track in tracks where !alreadyWhole.contains(track) {
+            let chunks = manifest.track(track).chunks.sorted { $0.index < $1.index }
+            var pending: [ChunkRef] = []
+            var position = 0
+            func flushPending() {
+                plan += Self.batches(
+                    chunks: pending, sampleRate: manifest.sampleRate,
+                    maxSeconds: remote.maxUploadSeconds
+                ).map { UploadBatch(track: track, chunks: $0) }
+                pending = []
+            }
+            while position < chunks.count {
+                try Task.checkCancellation()
+                let first = chunks[position]
+                let cached = await handle.chunkTranscript(
+                    engineID: engine.id.rawValue, track: track, chunkIndex: first.index
+                )
+                var cachedEnd: Int?
+                if let cached {
+                    var frames: Int64 = 0
+                    for end in position ..< chunks.count {
+                        guard chunks[end].startFrame == first.startFrame + frames else { break }
+                        frames += chunks[end].frameCount
+                        if cached.matches(
+                            engineID: engine.id.rawValue,
+                            localeIdentifier: effective.identifier,
+                            chunkFingerprint: Self.batchFingerprint(
+                                startFrame: first.startFrame, frameCount: frames
+                            )
+                        ) {
+                            cachedEnd = end
+                            break
+                        }
+                    }
+                }
+                if let end = cachedEnd {
+                    flushPending()
+                    plan.append(UploadBatch(track: track, chunks: Array(chunks[position ... end])))
+                    position = end + 1
+                } else {
+                    pending.append(first)
+                    position += 1
+                }
+            }
+            flushPending()
         }
         let total = Double(plan.count)
 

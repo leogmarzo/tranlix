@@ -383,7 +383,7 @@ struct DeepInfraEngineTests {
         // Four minutes, not the fifteen a whole track used to get. Nothing asserted this
         // before, which is how the fifteen went unexamined until it cost a session.
         #expect(seen.value == 240)
-        #expect(DeepInfraEngine.defaultMaxUploadSeconds == 600)
+        #expect(DeepInfraEngine.defaultMaxUploadSeconds == 300)
     }
 
     @Test("cancelling reads as cancellation, not as a failed transcription")

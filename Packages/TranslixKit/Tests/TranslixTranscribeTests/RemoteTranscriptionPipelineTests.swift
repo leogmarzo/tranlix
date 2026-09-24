@@ -508,6 +508,40 @@ struct RemoteTranscriptionPipelineTests {
         }
     }
 
+    @Test("smaller uploads reuse completed larger batches and resume only missing audio")
+    func smallerUploadsPreserveCachedBatches() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root, micChunks: [16000, 16000, 16000, 16000], systemChunks: []
+            )
+            let original = StubTrackEngine(
+                failAfter: 1, separatesSpeakers: false, maxUploadSeconds: 2,
+                segmentsForTrack: { Self.marker(for: $0) }
+            )
+            await #expect(throws: (any Error).self) {
+                try await TranscriptionPipeline(engine: original).transcribe(
+                    session: handle, language: self.language, progress: { _ in }
+                )
+            }
+            let resumed = StubTrackEngine(
+                separatesSpeakers: false, maxUploadSeconds: 1,
+                segmentsForTrack: { Self.marker(for: $0) }
+            )
+            let pipeline = TranscriptionPipeline(engine: resumed)
+            let transcript = try await pipeline.transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+            #expect(await resumed.trackCallCount == 2)
+            #expect(transcript.segments.map(\.start) == [0.25, 2.25, 3.25])
+            let cached = await handle.chunkTranscript(
+                engineID: resumed.id.rawValue, track: .mic, chunkIndex: 0
+            )
+            #expect(cached?.chunkFingerprint == "batch-0-32000")
+            try await pipeline.transcribe(session: handle, language: language, progress: { _ in })
+            #expect(await resumed.trackCallCount == 2)
+        }
+    }
+
     @Test("a retry does not walk the progress bar backwards")
     func retryingKeepsFractionsAscending() async throws {
         try await withTemporaryRoot { root in
