@@ -194,7 +194,7 @@ The team will publish the draft tomorrow.
 
 Implemented on `codex/speaker-names-and-people-conflicts`, preserving the pre-existing uncommitted People implementation and unrelated changes.
 
-- Full Swift package suite: **569 tests passed**.
+- Clean feature commit: **568 Swift package tests passed**. The original workspace, which also contains independent DeepInfra changes, passed 569 tests.
 - macOS Debug build: **BUILD SUCCEEDED**.
 - Independent review: three findings fixed with regression tests (corrupt transcript replacement, a metadata delimiter appearing inside Markdown, and stale notification focus targeting a reused name).
 - Synthetic UI walkthrough: badge counts 2 → 1 → 0; popover groups; Settings → People navigation; highlighted rows and focused name; scrolling to another group; keyboard save; source-recording link; inferred-name provenance.
