@@ -63,6 +63,9 @@ public struct SessionManifest: Codable, Sendable, Equatable {
     /// produced, and names are applied when rendering.
     public var speakerNames: [String: String]
 
+    public var speakerIdentities: [String: SpeakerIdentity]?
+    public var voiceRecognitionError: String?
+
     /// Identifier of the engine that produced the current transcript.
     public var transcriptionEngine: String?
 
@@ -159,6 +162,8 @@ public struct SessionManifest: Codable, Sendable, Equatable {
         speakerNames = try container.decodeIfPresent(
             [String: String].self, forKey: .speakerNames
         ) ?? [:]
+        speakerIdentities = try container.decodeIfPresent([String: SpeakerIdentity].self, forKey: .speakerIdentities)
+        voiceRecognitionError = try container.decodeIfPresent(String.self, forKey: .voiceRecognitionError)
         transcriptionEngine = try container.decodeIfPresent(
             String.self, forKey: .transcriptionEngine
         )

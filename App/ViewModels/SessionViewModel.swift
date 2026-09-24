@@ -43,6 +43,9 @@ final class SessionViewModel {
     private(set) var peaks: [AudioTrack: [Float]] = [:]
     private(set) var speakers: [SpeakerRow] = []
     private(set) var notes: [SavedNote] = []
+    private(set) var knownPeople: [VoiceProfile] = []
+    private(set) var voiceStatus: String?
+    private var voiceTask: Task<Void, Never>?
 
     var tab: Tab = .notes
     var query = ""
@@ -76,6 +79,8 @@ final class SessionViewModel {
                 player = try? SessionPlayer(manifest: manifest, layout: summary.layout)
                 loadPeaks()
             }
+            // Optional identity data must never prevent playback of the original recording.
+            await refreshKnownPeople()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -120,7 +125,7 @@ final class SessionViewModel {
     // MARK: - What the session is doing
 
     var isProcessing: Bool {
-        environment.pipeline?.isRunning(summary.id) == true
+        voiceTask != nil || environment.pipeline?.isRunning(summary.id) == true
     }
 
     var phase: PipelinePhase? {
@@ -131,6 +136,8 @@ final class SessionViewModel {
     var failure: String? {
         environment.pipeline?.failures[summary.id] ?? manifest?.failure?.message
     }
+
+    var namingWarning: String? { environment.pipeline?.namingWarnings[summary.id] }
 
     var hasTranscript: Bool { transcript?.segments.isEmpty == false }
 
@@ -255,6 +262,7 @@ final class SessionViewModel {
     }
 
     func cancel() {
+        voiceTask?.cancel()
         Task { await environment.pipeline?.cancel(summary.id) }
     }
 
@@ -272,6 +280,15 @@ final class SessionViewModel {
     }
 
     // MARK: - Speakers
+
+    func refreshKnownPeople() async {
+        do {
+            knownPeople = try await VoiceProfileStore(root: summary.layout.root.deletingLastPathComponent()).profiles()
+        } catch {
+            knownPeople = []
+            errorMessage = error.localizedDescription
+        }
+    }
 
     private func rebuildSpeakers() {
         guard let manifest, let transcript else {
@@ -303,8 +320,9 @@ final class SessionViewModel {
         )
     }
 
-    func rename(_ id: String, to name: String) async {
+    func rename(_ id: String, to name: String, rejectingSuggestion: Bool = false) async {
         guard let index = speakers.firstIndex(where: { $0.id == id }) else { return }
+        guard speakers[index].name != name || rejectingSuggestion else { return }
         speakers[index].name = name
         do {
             let handle = try environment.store.handle(at: summary.layout.root)
@@ -312,6 +330,58 @@ final class SessionViewModel {
             manifest = await handle.manifest
         } catch {
             errorMessage = error.localizedDescription
+            await load()
+        }
+    }
+
+    func rememberSpeaker(_ id: String, name: String) {
+        performVoiceAction { service, handle, progress in
+            _ = try await service.enroll(session: handle, speakerID: id, name: name, progress: progress)
+        }
+    }
+
+    func confirmSpeaker(_ id: String, personID: UUID) {
+        performVoiceAction { service, handle, _ in
+            try await service.confirm(session: handle, speakerID: id, personID: personID)
+        }
+    }
+
+    func recognizeSpeakers() {
+        performVoiceAction { service, handle, progress in
+            try await service.recognize(session: handle, progress: progress)
+        }
+    }
+
+    private func performVoiceAction(
+        _ operation: @escaping @Sendable (
+            VoiceRecognitionService, SessionHandle, @escaping @Sendable (Double) -> Void
+        ) async throws -> Void
+    ) {
+        guard !isProcessing else { return }
+        errorMessage = nil
+        voiceStatus = "Analyzing voices locally…"
+        let service = environment.voiceRecognition(for: summary.layout.root)
+        voiceTask = Task {
+            defer {
+                voiceTask = nil
+                voiceStatus = nil
+            }
+            do {
+                let handle = try environment.store.handle(at: summary.layout.root)
+                try await operation(service, handle) { fraction in
+                    Task { @MainActor in
+                        guard self.voiceTask != nil else { return }
+                        self.voiceStatus = "Analyzing voices locally… \(Int(fraction * 100))%"
+                    }
+                }
+                try await handle.update { $0.voiceRecognitionError = nil }
+            } catch is CancellationError {
+                // A cancelled analysis is not an error banner.
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            await environment.people.refresh()
+            await load()
         }
     }
 

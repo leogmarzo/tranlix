@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TranslixModel
 import TranslixTranscribe
@@ -31,6 +32,9 @@ struct SessionInspector: View {
         }
         .frame(width: 260)
         .background(.quaternary.opacity(0.35))
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            Task { await model.refreshKnownPeople() }
+        }
     }
 
     // MARK: - Tracks
@@ -150,11 +154,40 @@ struct SessionInspector: View {
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.speakers) { speaker in
-                    SpeakerNameField(speaker: speaker) { name in
-                        await model.rename(speaker.id, to: name)
+                    VStack(alignment: .leading, spacing: 5) {
+                        SpeakerNameField(speaker: speaker, busy: model.isProcessing,
+                            remembered: isRemembered(speaker.id),
+                            remember: { model.rememberSpeaker(speaker.id, name: $0) }) { name in
+                            await model.rename(speaker.id, to: name)
+                        }
+                        if speaker.id != SessionManifest.micSpeakerID {
+                            identityControls(speaker.id)
+                        }
                     }
                 }
             }
+
+            if let warning = model.namingWarning {
+                Text(warning).font(.caption).foregroundStyle(.orange)
+            }
+            if let status = model.voiceStatus {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text(status).font(.caption2)
+                    Button("Cancel") { model.cancel() }.buttonStyle(.link)
+                }
+            }
+            if let error = manifest.voiceRecognitionError {
+                Text(error).font(.caption2).foregroundStyle(.orange)
+            }
+            Button("Recognize saved voices") { model.recognizeSpeakers() }
+                .buttonStyle(.link)
+                .font(.caption)
+                .disabled(model.isProcessing || model.knownPeople.isEmpty || model.speakers.isEmpty)
+
+            Text("Remember a named person to recognize them in future meetings. Older recordings may need local voice analysis first. Manage saved people in Settings → People.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
 
             Button("Reprocesar desde cero") { model.reprocessSpeakers() }
                 .buttonStyle(.link)
@@ -164,6 +197,49 @@ struct SessionInspector: View {
             Text("Los nombres se guardan aparte del transcript, así que renombrar es instantáneo y no se pierde al volver a transcribir.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    private func isRemembered(_ speakerID: String) -> Bool {
+        guard let identity = manifest.speakerIdentities?[speakerID],
+              identity.source == .confirmed || identity.source == .automatic,
+              let personID = identity.personID else { return false }
+        return model.knownPeople.contains { $0.id == personID }
+    }
+
+    @ViewBuilder
+    private func identityControls(_ speakerID: String) -> some View {
+        if let identity = manifest.speakerIdentities?[speakerID] {
+            if identity.source == .suggested, let personID = identity.personID,
+               let person = model.knownPeople.first(where: { $0.id == personID }) {
+                HStack {
+                    Button("Confirm \(person.name)") { model.confirmSpeaker(speakerID, personID: personID) }
+                    Button("Dismiss") { Task { await model.rename(speakerID, to: "", rejectingSuggestion: true) } }
+                }
+                .font(.caption2)
+                .disabled(model.isProcessing)
+            } else if identity.source == .automatic {
+                Text("Recognized automatically").font(.caption2).foregroundStyle(.secondary)
+                if let personID = identity.personID, isRemembered(speakerID) {
+                    Button("Confirm identification") { model.confirmSpeaker(speakerID, personID: personID) }
+                        .font(.caption2)
+                        .disabled(model.isProcessing)
+                }
+            } else if identity.source == .inferredFromNotes {
+                Text("Inferred from notes").font(.caption2).foregroundStyle(.secondary)
+                    .help(identity.evidence ?? "You can edit this name before remembering the person.")
+            } else if isRemembered(speakerID) {
+                Text("Saved person").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        if !model.knownPeople.isEmpty {
+            Menu("Assign a saved person") {
+                ForEach(model.knownPeople) { person in
+                    Button(person.name) { model.confirmSpeaker(speakerID, personID: person.id) }
+                }
+            }
+            .controlSize(.mini)
+            .disabled(model.isProcessing)
         }
     }
 
@@ -215,13 +291,17 @@ struct SessionInspector: View {
 /// manifest, and doing that per character would be a write per letter typed.
 private struct SpeakerNameField: View {
     let speaker: SessionViewModel.SpeakerRow
+    let busy: Bool
+    let remembered: Bool
+    let remember: (String) -> Void
     let commit: (String) async -> Void
 
     @State private var text = ""
     @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 5) {
+          HStack(spacing: 8) {
             Image(systemName: speaker.id == SessionManifest.micSpeakerID ? "mic" : "person.wave.2")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -235,13 +315,26 @@ private struct SpeakerNameField: View {
                 .onChange(of: focused) { _, isFocused in
                     if !isFocused { save() }
                 }
+                .disabled(busy)
 
             Text(duration)
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
                 .monospacedDigit()
+          }
+          if speaker.id != SessionManifest.micSpeakerID, !remembered {
+              Button("Remember for future meetings") {
+                  remember(text.trimmingCharacters(in: .whitespacesAndNewlines))
+              }
+              .buttonStyle(.link)
+              .font(.caption2)
+              .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+          }
         }
         .task(id: speaker.id) { text = speaker.name }
+        .onChange(of: speaker.name) { _, name in
+            if !focused { text = name }
+        }
     }
 
     private var duration: String {

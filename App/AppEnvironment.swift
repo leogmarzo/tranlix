@@ -16,6 +16,8 @@ import TranslixTranscribe
 @Observable
 final class AppEnvironment {
     private(set) var store: SessionStore
+    private(set) var voiceProfiles: VoiceProfileStore
+    let people: PeopleViewModel
     private(set) var coordinator: RecordingCoordinator
 
     /// Shared so a loaded Whisper model outlives the session that loaded it, instead of
@@ -65,11 +67,24 @@ final class AppEnvironment {
         let root = saved.map { URL(filePath: $0) } ?? SessionStore.defaultRoot
         recordingsRoot = root
         store = SessionStore(root: root)
+        let profiles = VoiceProfileStore(root: root)
+        voiceProfiles = profiles
+        people = PeopleViewModel(root: root, store: profiles)
         coordinator = RecordingCoordinator(store: SessionStore(root: root))
     }
 
     private func rebuild() {
         store = SessionStore(root: recordingsRoot)
+        voiceProfiles = VoiceProfileStore(root: recordingsRoot)
+        people.switchLibrary(root: recordingsRoot, store: voiceProfiles)
+        navigation.peopleFocus = nil
+        Task { await people.refresh() }
         coordinator = RecordingCoordinator(store: SessionStore(root: recordingsRoot))
+    }
+
+    func voiceRecognition(for sessionRoot: URL) -> VoiceRecognitionService {
+        let libraryRoot = sessionRoot.deletingLastPathComponent()
+        let profiles = libraryRoot == recordingsRoot ? voiceProfiles : VoiceProfileStore(root: libraryRoot)
+        return VoiceRecognitionService(profiles: profiles, diarizer: diarizer)
     }
 }

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TranslixStore
 
@@ -37,9 +38,17 @@ struct RootView: View {
         } detail: {
             detail
         }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) { PeopleNotificationsButton(environment: environment) }
+        }
+        .task(id: environment.recordingsRoot) { await environment.people.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            Task { await environment.people.refresh() }
+        }
         .task {
             environment.installPipeline(settings: settings)
             environment.pipeline?.onRunFinished = { Task { await library.refresh() } }
+            environment.pipeline?.onSessionRenamed = { library.markFolderOutOfSync($0) }
             // A finished recording goes straight into transcription, speakers and notes.
             // Nothing here asks the user to press three buttons in the right order.
             recorder.onSessionFinished = { handle, ending in

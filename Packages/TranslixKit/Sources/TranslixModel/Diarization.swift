@@ -15,18 +15,22 @@ public struct SpeakerTurn: Codable, Sendable, Equatable, Identifiable {
     /// look at when a transcript attributes a line to the wrong person.
     public var confidence: Double
 
+    public var voice: VoiceDescriptor?
+
     public init(
         id: UUID = UUID(),
         speakerID: String,
         start: TimeInterval,
         end: TimeInterval,
-        confidence: Double = 1
+        confidence: Double = 1,
+        voice: VoiceDescriptor? = nil
     ) {
         self.id = id
         self.speakerID = speakerID
         self.start = start
         self.end = end
         self.confidence = confidence
+        self.voice = voice
     }
 
     public var duration: TimeInterval { max(0, end - start) }

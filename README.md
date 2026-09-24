@@ -83,6 +83,45 @@ describes something real rather than a scaffold of empty directories.
 
 ## Data on disk
 
+### Remembering people across meetings
+
+In a meeting's speaker inspector, enter a name and select **Remember for future meetings**.
+Translix stores a local voice profile and compares it with speakers in later recordings,
+before generating notes. Strong, unambiguous matches receive the saved name automatically;
+uncertain matches appear as suggestions to confirm or dismiss. Manual names and corrections
+take priority. Automatic matches never train new profiles on their own.
+
+Use **Settings → People** to rename or delete saved profiles. These changes affect future
+recognition; existing meeting names remain intact. Profiles live in `voice-profiles.json`
+at the recordings-library root. Moving to another library selects its own profile registry.
+The microphone's self-speaker is excluded from enrollment.
+
+When generating notes, Translix can fill an unnamed participant's label from an explicit
+self-introduction in their transcript. This uses the same notes request, preserves manual
+names and saved-person recognition, and marks the result **Inferred from notes** in the
+speaker inspector. Uncertain names remain blank. Edit the inferred name if needed; choosing
+**Remember for future meetings** is still required to create a reusable voice profile.
+Regenerating notes enables this for existing recordings with separated speakers. Reprocessing
+the transcript clears outdated inferred names.
+
+The toolbar bell lists saved profiles with matching names. Select a notification to open
+**Settings → People** with the affected rows highlighted, then add a surname or another
+distinguishing detail. New profiles include their source recording for reference; older
+profiles show a short identifier. The badge counts unresolved name groups and disappears as
+conflicts are resolved. Matching names never cause profiles to be merged or voices to be
+associated automatically.
+
+At least six seconds of usable speech are required. Older recordings and AssemblyAI results
+may require a local analysis pass from retained audio. The transcript's speaker labels remain
+unchanged. If analysis fails, the transcript and notes remain available and recognition can
+be retried from the inspector.
+
+Recognition uses conservative cosine-similarity thresholds, not calibrated probabilities.
+Audio quality and changes in microphone or voice can affect results. Validate assignments
+before relying on them; real-meeting accuracy requires representative labeled recordings.
+
+### Session files
+
 No database. One folder per session, `manifest.json` is the source of truth, and the library
 index is rebuilt by scanning at launch. Everything is inspectable, backup-friendly, and
 survives any failure of the app itself.

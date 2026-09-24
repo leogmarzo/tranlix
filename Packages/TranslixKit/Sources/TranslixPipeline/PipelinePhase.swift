@@ -11,6 +11,7 @@ import TranslixTranscribe
 public enum PipelinePhase: Sendable, Equatable {
     case transcribing(TranscriptionPhase)
     case diarizing(DiarizationPhase)
+    case recognizingVoices(fraction: Double)
 
     /// Working out whether this was a class, a meeting or something else.
     ///
@@ -19,6 +20,7 @@ public enum PipelinePhase: Sendable, Equatable {
     /// for something that takes a second and a half.
     case classifying
 
+    case namingWarning(String)
     case writingNotes
     case finished
 
@@ -26,7 +28,8 @@ public enum PipelinePhase: Sendable, Equatable {
         switch self {
         case .transcribing: .transcription
         case .diarizing: .diarization
-        case .classifying, .writingNotes: .notes
+        case .recognizingVoices: .diarization
+        case .classifying, .writingNotes, .namingWarning: .notes
         case .finished: nil
         }
     }
@@ -45,8 +48,10 @@ public enum PipelinePhase: Sendable, Equatable {
         switch self {
         case let .transcribing(phase): Self.transcriptionDetail(phase)
         case let .diarizing(phase): Self.diarizationDetail(phase)
+        case let .recognizingVoices(fraction): "Recognizing saved voices… \(Int(fraction * 100))%"
         case .classifying: "Viendo de qué se trata la grabación…"
         case .writingNotes: "Escribiendo las notas…"
+        case let .namingWarning(message): message
         case .finished: "Listo"
         }
     }
@@ -103,8 +108,10 @@ public enum PipelinePhase: Sendable, Equatable {
         switch self {
         case let .transcribing(phase): phase.fraction
         case let .diarizing(phase): phase.fraction
+        case let .recognizingVoices(fraction): fraction
         case .classifying: 0.2
         case .writingNotes: 0.6
+        case .namingWarning: 1
         case .finished: 1
         }
     }

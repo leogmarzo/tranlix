@@ -13,6 +13,9 @@ import TranslixModel
 /// The models are about 22 MB in total, small enough that this is worth having on by default
 /// in a way the 1.6 GB Whisper download is not.
 public actor FluidAudioDiarizer: Diarizer {
+    /// Update whenever the embedding model or its coordinate space changes.
+    public static let voiceModelID = "fluidaudio-community-resnet34-256-v1"
+
     public nonisolated let id = DiarizerID.fluidAudio
     public nonisolated let displayName = "FluidAudio (pyannote)"
 
@@ -226,7 +229,11 @@ public actor FluidAudioDiarizer: Diarizer {
                 speakerID: SessionManifest.systemSpeakerID(number),
                 start: TimeInterval(segment.startTimeSeconds),
                 end: TimeInterval(segment.endTimeSeconds),
-                confidence: Double(segment.qualityScore)
+                confidence: Double(segment.qualityScore),
+                voice: segment.embedding.count == 256 ? VoiceDescriptor(
+                    modelID: voiceModelID, vector: segment.embedding,
+                    speechSeconds: Double(segment.endTimeSeconds - segment.startTimeSeconds)
+                ) : nil
             )
         }
     }

@@ -10,13 +10,20 @@ struct SettingsView: View {
     @Bindable var settings: SettingsStore
 
     var body: some View {
-        TabView {
+        @Bindable var navigation = environment.navigation
+        TabView(selection: $navigation.settingsTab) {
             GeneralSettings(environment: environment, settings: settings)
                 .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(AppNavigation.SettingsTab.general)
             TranscriptionSettingsPane(environment: environment, settings: settings)
                 .tabItem { Label("Transcripción", systemImage: "text.bubble") }
+                .tag(AppNavigation.SettingsTab.transcription)
             NotesSettingsPane(settings: settings)
                 .tabItem { Label("Notas", systemImage: "sparkles") }
+                .tag(AppNavigation.SettingsTab.notes)
+            VoiceProfilesSettingsPane(environment: environment)
+                .tabItem { Label("People", systemImage: "person.2") }
+                .tag(AppNavigation.SettingsTab.people)
         }
         // Tall enough that the Transcription pane shows its model rows without scrolling.
         // The download and remove buttons live at the bottom of that list, and a window

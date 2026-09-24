@@ -32,6 +32,7 @@ public actor SessionPipeline {
     private let provider: any SummaryProvider
     private let classifier: any SessionClassifier
     private let clock: @Sendable () -> Date
+    private let voiceRecognition: VoiceRecognitionService?
 
     /// The classifier is injected rather than built from `provider`, even though the real one
     /// wraps it: classification is a second call on the same account, and a test that could not
@@ -41,13 +42,15 @@ public actor SessionPipeline {
         diarizer: any Diarizer,
         provider: any SummaryProvider,
         classifier: any SessionClassifier,
-        clock: @escaping @Sendable () -> Date = { Date() }
+        clock: @escaping @Sendable () -> Date = { Date() },
+        voiceRecognition: VoiceRecognitionService? = nil
     ) {
         self.engine = engine
         self.diarizer = diarizer
         self.provider = provider
         self.classifier = classifier
         self.clock = clock
+        self.voiceRecognition = voiceRecognition
     }
 
     /// Runs the chain, reporting progress as it goes.
@@ -119,6 +122,20 @@ public actor SessionPipeline {
             } catch {
                 // Deliberately swallowed. The transcript is intact and the user can retry
                 // speaker separation on its own from the session view.
+            }
+        }
+
+        if let voiceRecognition {
+            try Task.checkCancellation()
+            do {
+                try await voiceRecognition.recognize(session: handle) { fraction in
+                    continuation.yield(.recognizingVoices(fraction: fraction))
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                let message = error.localizedDescription
+                try? await handle.update { $0.voiceRecognitionError = message }
             }
         }
 
@@ -235,7 +252,7 @@ public actor SessionPipeline {
         let template = notes.template(for: kind)
 
         continuation.yield(.writingNotes)
-        try await SummaryPipeline(provider: provider).generate(
+        let generated = try await SummaryPipeline(provider: provider).generate(
             session: handle,
             transcript: rendered,
             instruction: instruction(
@@ -244,8 +261,10 @@ public actor SessionPipeline {
             title: template.title,
             model: notes.model,
             userConfirmedSharing: true,
-            now: clock()
+            now: clock(),
+            speakerContext: transcript
         )
+        if let warning = generated.namingWarning { continuation.yield(.namingWarning(warning)) }
     }
 
     /// What kind of session this is, worked out once and then remembered.

@@ -21,9 +21,11 @@ final class PipelineCoordinator {
 
     /// The last thing that went wrong for a session, kept until it is retried.
     private(set) var failures: [UUID: String] = [:]
+    private(set) var namingWarnings: [UUID: String] = [:]
 
     /// Fired whenever a run ends, so the library can pick up the new state.
     var onRunFinished: (() -> Void)?
+    var onSessionRenamed: ((UUID) -> Void)?
 
     private let environment: AppEnvironment
     private let settings: SettingsStore
@@ -108,10 +110,12 @@ final class PipelineCoordinator {
             engine: environment.engines.engine(settings.transcription.engineID),
             diarizer: environment.diarizer,
             provider: provider,
-            classifier: ModelSessionClassifier(provider: provider)
+            classifier: ModelSessionClassifier(provider: provider),
+            voiceRecognition: environment.voiceRecognition(for: await handle.layout.root)
         )
 
         failures[sessionID] = nil
+        namingWarnings[sessionID] = nil
         beginActivity()
 
         runs[sessionID] = Task { [weak self] in
@@ -120,13 +124,22 @@ final class PipelineCoordinator {
             }
             do {
                 for try await phase in pipeline.run(session: handle, request: request) {
-                    await MainActor.run { self?.phases[sessionID] = phase }
+                    await MainActor.run {
+                        if case let .namingWarning(message) = phase { self?.namingWarnings[sessionID] = message }
+                        else { self?.phases[sessionID] = phase }
+                    }
                 }
             } catch is CancellationError {
                 // Nothing to report: the user asked for this, and the stage put the session
                 // back where it found it.
             } catch {
                 await MainActor.run { self?.failures[sessionID] = error.localizedDescription }
+            }
+            // Queue the folder move before finish refreshes the library. The pipeline still
+            // owns its original URL until then, including when a later operation failed.
+            try? await handle.reload()
+            if await handle.manifest.title != manifest.title {
+                self?.onSessionRenamed?(sessionID)
             }
         }
     }

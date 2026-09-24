@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import TranslixModel
 
 enum SidebarSelection: Hashable {
     case record
@@ -14,5 +15,18 @@ enum SidebarSelection: Hashable {
 @MainActor
 @Observable
 final class AppNavigation {
+    enum SettingsTab: Hashable { case general, transcription, notes, people }
+    struct PeopleFocus: Equatable {
+        let id = UUID()
+        let conflict: PeopleNameConflict
+    }
+
     var selection: SidebarSelection? = .record
+    var settingsTab: SettingsTab = .general
+    var peopleFocus: PeopleFocus?
+
+    func showPeopleConflict(_ conflict: PeopleNameConflict) {
+        settingsTab = .people
+        peopleFocus = PeopleFocus(conflict: conflict)
+    }
 }

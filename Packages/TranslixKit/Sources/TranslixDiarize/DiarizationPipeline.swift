@@ -1,4 +1,5 @@
 import AVFoundation
+import CryptoKit
 import Foundation
 import TranslixModel
 import TranslixStore
@@ -58,7 +59,7 @@ public actor DiarizationPipeline {
         defer { try? FileManager.default.removeItem(at: scratch) }
 
         let audio = try systemAudio(manifest: manifest, layout: layout, scratch: scratch)
-        let fingerprint = Self.fingerprint(of: audio.url)
+        let fingerprint = try Self.fingerprint(of: audio.url)
 
         let diarization: Diarization
         if !force, let cached = await handle.readDiarization(),
@@ -97,7 +98,8 @@ public actor DiarizationPipeline {
                         speakerID: $0.speakerID,
                         start: $0.start + offset,
                         end: $0.end + offset,
-                        confidence: $0.confidence
+                        confidence: $0.confidence,
+                        voice: $0.voice
                     )
                 }
             )
@@ -153,7 +155,7 @@ public actor DiarizationPipeline {
     /// recording will consist of for the rest of its life. Otherwise the chunks are joined
     /// into scratch space — a session can be diarized before it has been archived, and
     /// refusing to would make the feature depend on an unrelated stage having finished.
-    private func systemAudio(
+    func systemAudio(
         manifest: SessionManifest,
         layout: SessionLayout,
         scratch: URL
@@ -187,11 +189,16 @@ public actor DiarizationPipeline {
 
     /// Identifies the exact audio a stored result came from.
     ///
-    /// Same idea as the transcription runner's: size plus duration is enough to notice a file
-    /// that was replaced or truncated, without hashing an hour of audio on every launch.
-    static func fingerprint(of url: URL) -> String {
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int64
-        let frames = (try? AVAudioFile(forReading: url))?.length ?? 0
-        return "\(frames)-\(size ?? 0)"
+    /// Identity evidence must not survive replacement with different audio of the same size.
+    /// Stream the hash to keep memory bounded even for long recordings.
+    static func fingerprint(of url: URL) throws -> String {
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        var hash = SHA256()
+        while let data = try file.read(upToCount: 1_048_576), !data.isEmpty {
+            try Task.checkCancellation()
+            hash.update(data: data)
+        }
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

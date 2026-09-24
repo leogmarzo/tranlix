@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import TranslixModel
 
 /// Serialized access to one session folder.
@@ -8,6 +9,7 @@ import TranslixModel
 /// and is persisted immediately: the manifest on disk is the truth, and an in-memory copy
 /// that has drifted from it is exactly the bug this design exists to prevent.
 public actor SessionHandle {
+    private static let diskLock = Mutex(())
     public let layout: SessionLayout
     public private(set) var manifest: SessionManifest
 
@@ -24,15 +26,13 @@ public actor SessionHandle {
     /// The closure is `sending` because callers are usually other actors: handing the
     /// mutation over rather than sharing it is what lets it run here safely.
     public func update(_ mutate: sending (inout SessionManifest) throws -> Void) throws {
-        // Re-read before mutating. `SessionStore.handle(at:)` hands out a new actor per call,
-        // each with its own cached copy, and a handle can be minutes old — a transcription
-        // holds one for its whole run. Writing back a stale copy would silently undo whatever
-        // was written through another handle meanwhile, which for a rename means losing it.
-        // Last-writer-wins now applies per field instead of per whole manifest.
-        //
-        // Anything reading the manifest to decide *what* to write must therefore do so inside
-        // the closure: a guard or an index taken from the cached copy is exactly the staleness
-        // this is closing over.
+        try Self.diskLock.withLock { _ in
+            try updateLocked(mutate)
+        }
+    }
+
+    /// Caller owns diskLock; protects decisions across separate session handles.
+    private func updateLocked(_ mutate: (inout SessionManifest) throws -> Void) throws {
         if let fresh = try? Self.readManifest(at: layout.manifestURL) { manifest = fresh }
         var updated = manifest
         try mutate(&updated)
@@ -196,11 +196,92 @@ public actor SessionHandle {
     public func renameSpeaker(id: String, to name: String) throws {
         try update { manifest in
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            var identities = manifest.speakerIdentities ?? [:]
+            identities[id] = SpeakerIdentity(name: trimmed, source: .manual)
+            manifest.speakerIdentities = identities
             if trimmed.isEmpty {
                 manifest.speakerNames.removeValue(forKey: id)
             } else {
                 manifest.speakerNames[id] = trimmed
             }
+        }
+    }
+
+    /// Apply recognition only to labels that the user has not edited or confirmed.
+    public func applyVoiceIdentities(
+        _ candidates: [String: SpeakerIdentity],
+        evaluatedSpeakers: Set<String> = [],
+        existingPersonIDs: Set<UUID>? = nil
+    ) throws {
+        try update { manifest in
+            var identities = manifest.speakerIdentities ?? [:]
+            for id in evaluatedSpeakers where candidates[id] == nil {
+                guard let previous = identities[id],
+                      previous.source == .automatic || previous.source == .suggested,
+                      let personID = previous.personID, existingPersonIDs?.contains(personID) == true
+                else { continue }
+                if previous.source == .automatic, manifest.speakerNames[id] == previous.name {
+                    manifest.speakerNames.removeValue(forKey: id)
+                }
+                identities.removeValue(forKey: id)
+            }
+            for (id, candidate) in candidates {
+                let previous = identities[id]
+                guard previous?.source != .manual, previous?.source != .confirmed else { continue }
+                if let existingPersonIDs, let personID = previous?.personID,
+                   !existingPersonIDs.contains(personID) { continue }
+                if let existing = manifest.speakerNames[id], existing != previous?.name { continue }
+                identities[id] = candidate
+                if candidate.source == .automatic {
+                    manifest.speakerNames[id] = candidate.name
+                } else if previous?.source == .automatic || previous?.source == .inferredFromNotes {
+                    manifest.speakerNames.removeValue(forKey: id)
+                }
+            }
+            manifest.speakerIdentities = identities
+            manifest.voiceRecognitionError = nil
+        }
+    }
+
+    public func confirmVoiceIdentity(_ profile: VoiceProfile, for speakerID: String) throws {
+        try update { manifest in
+            var identities = manifest.speakerIdentities ?? [:]
+            identities[speakerID] = SpeakerIdentity(personID: profile.id, name: profile.name, source: .confirmed)
+            manifest.speakerIdentities = identities
+            manifest.speakerNames[speakerID] = profile.name
+        }
+    }
+
+    /// Applies only grounded, still-unnamed speakers from the exact source transcript.
+    @discardableResult
+    public func applyInferredSpeakerNames(
+        _ candidates: [SpeakerNameCandidate], expectedTranscript: Transcript
+    ) throws -> Int {
+        try Task.checkCancellation()
+        return try Self.diskLock.withLock { _ in
+            let revision = expectedTranscript.speakerNamingRevision
+            guard !revision.isEmpty, try readTranscript()?.speakerNamingRevision == revision else { return 0 }
+            let grouped = Dictionary(grouping: candidates, by: \.speakerID)
+            let valid = grouped.values.compactMap { values -> SpeakerNameCandidate? in
+                guard let first = values.first, values.allSatisfy({ $0 == first }) else { return nil }
+                return first.validated(in: expectedTranscript)
+            }
+            guard !valid.isEmpty else { return 0 }
+            var count = 0
+            try updateLocked { manifest in
+                try Task.checkCancellation()
+                let eligible = SpeakerNameCandidate.eligibleSpeakerIDs(in: expectedTranscript, manifest: manifest)
+                var identities = manifest.speakerIdentities ?? [:]
+                for candidate in valid where eligible.contains(candidate.speakerID) {
+                    identities[candidate.speakerID] = SpeakerIdentity(name: candidate.name,
+                        source: .inferredFromNotes, evidence: candidate.evidence,
+                        transcriptRevision: expectedTranscript.speakerNamingRevision)
+                    manifest.speakerNames[candidate.speakerID] = candidate.name
+                    count += 1
+                }
+                manifest.speakerIdentities = identities
+            }
+            return count
         }
     }
 
@@ -235,7 +316,19 @@ public actor SessionHandle {
     }
 
     public func writeTranscript(_ transcript: Transcript) throws {
-        try AtomicFile.write(TranslixJSON.encode(transcript), to: layout.transcriptJSONURL)
+        try Self.diskLock.withLock { _ in
+            let previous = try? readTranscript()
+            try AtomicFile.write(TranslixJSON.encode(transcript), to: layout.transcriptJSONURL)
+            guard previous?.speakerNamingRevision != transcript.speakerNamingRevision else { return }
+            try updateLocked { manifest in
+                var identities = manifest.speakerIdentities ?? [:]
+                for (id, identity) in identities where identity.source == .inferredFromNotes {
+                    if manifest.speakerNames[id] == identity.name { manifest.speakerNames.removeValue(forKey: id) }
+                    identities.removeValue(forKey: id)
+                }
+                manifest.speakerIdentities = identities
+            }
+        }
     }
 
     public func readTranscript() throws -> Transcript? {
@@ -256,6 +349,15 @@ public actor SessionHandle {
     public func readDiarization() -> Diarization? {
         guard let data = try? Data(contentsOf: layout.diarizationURL) else { return nil }
         return try? TranslixJSON.decode(Diarization.self, from: data)
+    }
+
+    public func readVoiceAnalysis() -> Diarization? {
+        guard let data = try? Data(contentsOf: layout.voiceAnalysisURL) else { return nil }
+        return try? TranslixJSON.decode(Diarization.self, from: data)
+    }
+
+    public func writeVoiceAnalysis(_ analysis: Diarization) throws {
+        try AtomicFile.write(TranslixJSON.encode(analysis), to: layout.voiceAnalysisURL)
     }
 
     /// Records what the session is, and how that was decided.

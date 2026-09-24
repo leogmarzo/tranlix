@@ -10,6 +10,8 @@ import TranslixModel
 public enum TranscriptRenderer {
     public struct Options: Sendable, Equatable {
         /// Timecodes in front of each block. Wanted when reading, noise in a prompt.
+        public var includeSpeakerIDs: Bool
+
         public var includeTimecodes: Bool
 
         /// The title, date and engine header.
@@ -29,12 +31,14 @@ public enum TranscriptRenderer {
         public var paragraphGap: TimeInterval
 
         public init(
+            includeSpeakerIDs: Bool = false,
             includeTimecodes: Bool = true,
             includeHeader: Bool = true,
             includeMarkers: Bool = true,
             includePauses: Bool = true,
             paragraphGap: TimeInterval = 3
         ) {
+            self.includeSpeakerIDs = includeSpeakerIDs
             self.includeTimecodes = includeTimecodes
             self.includeHeader = includeHeader
             self.includeMarkers = includeMarkers
@@ -53,7 +57,7 @@ public enum TranscriptRenderer {
         /// thing was said turns into something you can jump from. Costs one short code per
         /// paragraph — blocks are already merged, so it is far from one per segment.
         public static let prompt = Options(
-            includeTimecodes: true, includeHeader: false, includeMarkers: true
+            includeSpeakerIDs: true, includeTimecodes: true, includeHeader: false, includeMarkers: true
         )
     }
 
@@ -118,12 +122,15 @@ public enum TranscriptRenderer {
     ) -> [Block] {
         var blocks: [Block] = []
         var previousEnd: TimeInterval = -.infinity
+        var previousSpeakerID: String?
         let pauseOffsets = manifest.pauses.map(\.offset)
 
         for segment in transcript.segments.sorted(by: { $0.start < $1.start }) {
             let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { continue }
-            let speaker = name(for: segment, in: manifest)
+            let speakerID = segment.speakerID ?? (segment.track == .mic ? SessionManifest.micSpeakerID : "undiarized-system")
+            let label = name(for: segment, in: manifest)
+            let speaker = options.includeSpeakerIDs ? "[\(speakerID)] \(label)" : label
 
             // A pause always breaks the paragraph, however short the gap looks. The gap looks
             // like nothing precisely because these timestamps count recorded audio, and the
@@ -133,7 +140,7 @@ public enum TranscriptRenderer {
 
             // Extend the previous paragraph when the same person simply kept talking.
             if case let .speech(previousSpeaker, start, previousText) = blocks.last,
-               previousSpeaker == speaker,
+               previousSpeaker == speaker, previousSpeakerID == speakerID,
                !interrupted,
                segment.start - previousEnd <= options.paragraphGap
             {
@@ -144,6 +151,7 @@ public enum TranscriptRenderer {
                 blocks.append(.speech(speaker: speaker, start: segment.start, text: text))
             }
             previousEnd = max(previousEnd, segment.end)
+            previousSpeakerID = speakerID
         }
 
         var interruptions: [Block] = []

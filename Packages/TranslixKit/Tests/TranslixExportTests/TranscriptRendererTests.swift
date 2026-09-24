@@ -43,6 +43,22 @@ struct TranscriptRendererTests {
         )
     }
 
+    @Test("same-name speakers stay distinct and prompt labels carry stable IDs")
+    func sameNameSpeakers() {
+        let input = transcript([
+            segment("First voice", speaker: "system-1", from: 0, to: 1),
+            segment("Second voice", speaker: "system-2", from: 1, to: 2),
+        ])
+        let names = manifest(speakerNames: ["system-1": "Alex", "system-2": "Alex"])
+        let blocks = TranscriptRenderer.blocks(transcript: input, manifest: names)
+        #expect(blocks.count == 2)
+        let prompt = TranscriptRenderer.markdown(transcript: input, manifest: names, options: .prompt)
+        #expect(prompt.contains("[system-1]"))
+        #expect(prompt.contains("[system-2]"))
+        let document = TranscriptRenderer.markdown(transcript: input, manifest: names)
+        #expect(!document.contains("system-1"))
+    }
+
     // MARK: - Names
 
     @Test("the name the user typed is what ends up in the output")
