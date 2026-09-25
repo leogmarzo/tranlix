@@ -20,4 +20,17 @@ public enum ElapsedTime {
             total % 60
         )
     }
+
+    /// `MM:SS` under an hour, `H:MM` from then on.
+    ///
+    /// For the floating recorder, which is too narrow for eight characters. Seconds stop being
+    /// shown once an hour has passed: at that point they are the digit that moves, not the one
+    /// anyone reads, and keeping them would force a wider pill for the rest of the session.
+    public static func compact(_ seconds: Int) -> String {
+        let total = max(0, seconds)
+        guard total >= 3600 else {
+            return String(format: "%02d:%02d", total / 60, total % 60)
+        }
+        return String(format: "%d:%02d", total / 3600, (total / 60) % 60)
+    }
 }
