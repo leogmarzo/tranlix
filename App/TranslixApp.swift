@@ -21,6 +21,10 @@ struct TranslixApp: App {
 
     @State private var menuBar: MenuBarController
 
+    /// The pill that floats over other apps while a session is open. Owned here for the same
+    /// reason as the menu bar item: it outlives the window.
+    @State private var floatingRecorder: FloatingRecorderController
+
     init() {
         let environment = AppEnvironment()
         let settings = SettingsStore()
@@ -28,9 +32,13 @@ struct TranslixApp: App {
         _environment = State(wrappedValue: environment)
         _settings = State(wrappedValue: settings)
         _recorder = State(wrappedValue: recorder)
-        _menuBar = State(wrappedValue: MenuBarController(
-            recorder: recorder, navigation: environment.navigation
-        ))
+        let menuBar = MenuBarController(recorder: recorder, navigation: environment.navigation)
+        _menuBar = State(wrappedValue: menuBar)
+        let floatingRecorder = FloatingRecorderController(recorder: recorder, settings: settings)
+        // Same destination as the menu bar item's "Ir a la grabación", which already knows how
+        // to reopen a window that was closed.
+        floatingRecorder.openApp = { menuBar.goToRecording() }
+        _floatingRecorder = State(wrappedValue: floatingRecorder)
     }
 
     var body: some Scene {

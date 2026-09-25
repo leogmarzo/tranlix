@@ -134,7 +134,8 @@ final class MenuBarController: NSObject {
 
     // MARK: - Actions
 
-    @objc private func goToRecording() {
+    /// Also what the floating recorder's app glyph does.
+    @objc func goToRecording() {
         navigation.selection = .record
         NSApp.activate()
 
