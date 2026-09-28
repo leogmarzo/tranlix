@@ -41,7 +41,7 @@ public struct DeepInfraTranscription: Decodable, Sendable, Equatable {
             return DeepInfraSegment(start: timed.start, end: timed.end, text: timed.text)
         }
 
-        let rawWords = try container.decodeIfPresent([Lenient].self, forKey: .words)
+        let rawWords = try container.decodeIfPresent([LenientWord].self, forKey: .words)
         words = rawWords.map { items in
             items.compactMap { item in
                 guard let timed = item.timed else { return nil }
@@ -50,7 +50,7 @@ public struct DeepInfraTranscription: Decodable, Sendable, Equatable {
         }
     }
 
-    /// A segment or word as it arrives: any field may be absent or null.
+    /// A segment as it arrives: any field may be absent or null.
     private struct Lenient: Decodable {
         let start: TimeInterval?
         let end: TimeInterval?
@@ -59,6 +59,21 @@ public struct DeepInfraTranscription: Decodable, Sendable, Equatable {
         /// The entry, when it has everything needed to be placed on a timeline.
         var timed: (start: TimeInterval, end: TimeInterval, text: String)? {
             guard let start, let end, let text else { return nil }
+            return (start, end, text)
+        }
+    }
+
+    /// A word as it arrives. DeepInfra puts a word's text under `word` (as OpenAI's verbose
+    /// JSON does), not `text`; reading only `text` silently dropped every word. `text` is
+    /// still accepted in case a model on the same endpoint answers that way.
+    private struct LenientWord: Decodable {
+        let start: TimeInterval?
+        let end: TimeInterval?
+        let word: String?
+        let text: String?
+
+        var timed: (start: TimeInterval, end: TimeInterval, text: String)? {
+            guard let start, let end, let text = word ?? text else { return nil }
             return (start, end, text)
         }
     }
