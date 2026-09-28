@@ -159,7 +159,7 @@ struct ModelSessionClassifierTests {
         _ = try await ModelSessionClassifier(provider: provider)
             .classify(transcript: "Bueno, arranquemos.", signals: signals)
 
-        #expect(await provider.lastRequest?.model == "claude-sonnet-5")
+        #expect(await provider.lastRequest?.model == "claude-sonnet-5-5")
     }
 
     @Test("a transport failure is reported rather than dressed up as a classification")

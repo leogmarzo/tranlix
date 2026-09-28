@@ -60,13 +60,13 @@ public enum SummaryModel: String, Sendable, CaseIterable, Identifiable, Codable 
 
     public var identifier: String {
         switch self {
-        case .sonnet: "claude-sonnet-5"
+        case .sonnet: "claude-sonnet-5-5"
         }
     }
 
     public var displayName: String {
         switch self {
-        case .sonnet: "Claude Sonnet 5"
+        case .sonnet: "Claude Sonnet 5.5"
         }
     }
 }
