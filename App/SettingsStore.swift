@@ -1,8 +1,8 @@
 import Foundation
 import Observation
-import TranslixModel
-import TranslixSummarize
-import TranslixTranscribe
+import TranlixModel
+import TranlixSummarize
+import TranlixTranscribe
 
 /// User preferences, kept in `UserDefaults`.
 ///

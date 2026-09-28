@@ -1,5 +1,5 @@
 import SwiftUI
-import TranslixModel
+import TranlixModel
 
 /// The floating recorder: a narrow dark pill at the edge of the screen.
 ///
@@ -100,8 +100,8 @@ private struct AppGlyph: View {
                 }
         }
         .buttonStyle(.plain)
-        .help("Abrir Translix")
-        .accessibilityLabel("Abrir Translix")
+        .help("Abrir Tranlix")
+        .accessibilityLabel("Abrir Tranlix")
     }
 }
 

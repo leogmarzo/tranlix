@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
-import TranslixModel
-import TranslixTranscribe
+import TranlixModel
+import TranlixTranscribe
 
 /// The machinery, out of the way.
 ///

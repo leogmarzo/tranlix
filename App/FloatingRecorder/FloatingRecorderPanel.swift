@@ -17,7 +17,7 @@ final class FloatingRecorderPanel: NSPanel {
         isFloatingPanel = true
         level = .floating
         // `fullScreenAuxiliary` is what lets it onto another app's fullscreen Space;
-        // `ignoresCycle` keeps it out of Cmd-` in Translix.
+        // `ignoresCycle` keeps it out of Cmd-` in Tranlix.
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
 
         // The pill is drawn by SwiftUI; the window itself is invisible apart from the shadow,
@@ -26,7 +26,7 @@ final class FloatingRecorderPanel: NSPanel {
         backgroundColor = .clear
         hasShadow = true
 
-        // Panels hide when their app deactivates by default. Translix is inactive nearly the
+        // Panels hide when their app deactivates by default. Tranlix is inactive nearly the
         // whole time this is on screen, so that default would make it vanish the moment it
         // mattered.
         hidesOnDeactivate = false
