@@ -1,5 +1,5 @@
 import SwiftUI
-import TranslixStore
+import TranlixStore
 
 /// Offered at launch when sessions were interrupted.
 ///

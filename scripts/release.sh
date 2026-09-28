@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Builds, signs, notarizes and packages Translix for hand delivery.
+# Builds, signs, notarizes and packages Tranlix for hand delivery.
 #
 # The output is a .dmg that opens on any Mac without Gatekeeper arguing. Both the app and
 # the disk image get their notarization ticket stapled: the app so it still validates once
@@ -14,8 +14,8 @@
 #        xcrun notarytool store-credentials "tranlix" \
 #          --apple-id <apple-id> --team-id 5DBQ7XM8R8 --password <app-specific-password>
 #
-#      The profile keeps the app's former name because the credential already in the
-#      keychain is filed under it. Rename it only alongside a fresh store-credentials run.
+#      The credential in the keychain is filed under this profile name. Rename it only
+#      alongside a fresh store-credentials run.
 #
 # Usage:
 #   scripts/release.sh                 # full pipeline
@@ -30,8 +30,8 @@
 set -euo pipefail
 
 TEAM_ID="5DBQ7XM8R8"
-SCHEME="Translix"
-APP_NAME="Translix"
+SCHEME="Tranlix"
+APP_NAME="Tranlix"
 KEYCHAIN_PROFILE="${TRANLIX_NOTARY_PROFILE:-tranlix}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

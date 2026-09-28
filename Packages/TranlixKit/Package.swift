@@ -1,0 +1,131 @@
+// swift-tools-version: 6.2
+import PackageDescription
+
+// Modules are added here as each milestone lands, so the package always describes
+// something real. Dependency direction is one-way: TranlixModel is a leaf that every
+// other module depends on, and TranlixStore is the only module that knows the on-disk
+// layout.
+let package = Package(
+    name: "TranlixKit",
+    platforms: [.macOS(.v26)],
+    products: [
+        .library(
+            name: "TranlixKit",
+            targets: [
+                "TranlixModel",
+                "TranlixStore",
+                "TranlixCapture",
+                "TranlixTranscribe",
+                "TranlixDiarize",
+                "TranlixExport",
+                "TranlixSummarize",
+                "TranlixPlayback",
+                "TranlixPipeline",
+            ]
+        ),
+    ],
+    dependencies: [
+        // Pyannote diarization converted to CoreML. Chosen over sherpa-onnx, which is CPU-only
+        // and has no Swift integration; this runs on the Neural Engine and its offline pipeline
+        // is built for exactly our case, a finished file rather than a live stream.
+        .package(url: "https://github.com/FluidInference/FluidAudio", from: "0.15.5"),
+    ],
+    targets: [
+        .target(name: "TranlixModel"),
+        .testTarget(name: "TranlixModelTests", dependencies: ["TranlixModel"]),
+
+        .target(name: "TranlixStore", dependencies: ["TranlixModel"]),
+        .testTarget(
+            name: "TranlixStoreTests",
+            dependencies: ["TranlixStore", "TranlixModel", "TranlixTestSupport"]
+        ),
+
+        // Converting a raised NSException into a Swift error. Its own target because a
+        // SwiftPM target is single-language, and it is a dependency of Capture rather than a
+        // member of the product: nothing outside Capture has any business raising or
+        // catching Objective-C exceptions.
+        .target(name: "TranlixObjC"),
+
+        .target(
+            name: "TranlixCapture",
+            dependencies: ["TranlixModel", "TranlixStore", "TranlixObjC"]
+        ),
+        .testTarget(
+            name: "TranlixCaptureTests",
+            dependencies: ["TranlixCapture", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
+        ),
+
+        // Transcription is remote-only: Whisper large-v3 on DeepInfra. No model ships with
+        // the app, which is why this target has no third-party dependency.
+        .target(name: "TranlixTranscribe", dependencies: ["TranlixModel", "TranlixStore"]),
+        .testTarget(
+            name: "TranlixTranscribeTests",
+            dependencies: ["TranlixTranscribe", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
+        ),
+
+        .target(
+            name: "TranlixDiarize",
+            dependencies: [
+                "TranlixModel",
+                "TranlixStore",
+                .product(name: "FluidAudio", package: "FluidAudio"),
+            ]
+        ),
+        .testTarget(
+            name: "TranlixDiarizeTests",
+            dependencies: ["TranlixDiarize", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
+        ),
+
+        // Rendering only, and deliberately dependency-free beyond the model: the same
+        // renderer produces the Markdown the user exports and the text sent to be
+        // summarised, so what the model reads is exactly what the user can read.
+        .target(name: "TranlixExport", dependencies: ["TranlixModel"]),
+        .testTarget(
+            name: "TranlixExportTests",
+            dependencies: ["TranlixExport", "TranlixModel"]
+        ),
+
+        .target(name: "TranlixSummarize", dependencies: ["TranlixModel", "TranlixStore"]),
+        .testTarget(
+            name: "TranlixSummarizeTests",
+            dependencies: ["TranlixSummarize", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
+        ),
+
+        // Reading the audio back. Depends on Store rather than the other way around: the
+        // waveform cache lives beside the archives and is written by the transcription
+        // pipeline, so the digest itself belongs in Store and only the player lives here.
+        .target(name: "TranlixPlayback", dependencies: ["TranlixModel", "TranlixStore"]),
+        .testTarget(
+            name: "TranlixPlaybackTests",
+            dependencies: ["TranlixPlayback", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
+        ),
+
+        // The only module that knows all three stages exist. Kept out of the app layer for
+        // the reason SummaryPipeline already gives about its own invariant: a rule that lives
+        // only in the UI is one refactor away from being gone, and it can be tested here.
+        .target(
+            name: "TranlixPipeline",
+            dependencies: [
+                "TranlixModel",
+                "TranlixStore",
+                "TranlixTranscribe",
+                "TranlixDiarize",
+                "TranlixSummarize",
+                "TranlixExport",
+            ]
+        ),
+        .testTarget(
+            name: "TranlixPipelineTests",
+            dependencies: ["TranlixPipeline", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
+        ),
+
+        // Shared test helpers. Deliberately not part of the TranlixKit product, so nothing
+        // here can be linked into the app by accident. It depends on the stage modules so the
+        // stubs can live in one place: the chain has to drive all three at once, and three
+        // private copies of the same fake is how they drift apart.
+        .target(
+            name: "TranlixTestSupport",
+            dependencies: ["TranlixTranscribe", "TranlixDiarize", "TranlixSummarize"]
+        ),
+    ]
+)

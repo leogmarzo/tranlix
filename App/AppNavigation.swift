@@ -1,6 +1,6 @@
 import Foundation
 import Observation
-import TranslixModel
+import TranlixModel
 
 enum SidebarSelection: Hashable {
     case record

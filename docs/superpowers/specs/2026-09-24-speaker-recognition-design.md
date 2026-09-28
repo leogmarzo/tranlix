@@ -15,11 +15,11 @@ Remember a person explicitly named in one meeting and recognize that person by v
 
 ## Architecture
 
-Extend TranslixModel with versioned voice descriptors, persistent person profiles, and assignment provenance. Keep speaker IDs scoped to a meeting; associate them with a separate person ID when recognized or confirmed.
+Extend TranlixModel with versioned voice descriptors, persistent person profiles, and assignment provenance. Keep speaker IDs scoped to a meeting; associate them with a separate person ID when recognized or confirmed.
 
-Add an actor-backed profile store in TranslixStore, scoped to the recordings library. Use atomic writes and the existing JSON conventions. Keep profiles local and preserve compatibility with existing manifests and diarization files through optional fields and decoding defaults.
+Add an actor-backed profile store in TranlixStore, scoped to the recordings library. Use atomic writes and the existing JSON conventions. Keep profiles local and preserve compatibility with existing manifests and diarization files through optional fields and decoding defaults.
 
-Add comparison and enrollment services in TranslixDiarize. FluidAudio's installed offline pipeline returns speaker segments with embeddings; the current adapter drops those embeddings. Preserve usable descriptors with their embedding model identity. Validate dimensions, finite values, nonzero magnitude, and sufficient speech before accepting descriptors. Never compare incompatible model representations.
+Add comparison and enrollment services in TranlixDiarize. FluidAudio's installed offline pipeline returns speaker segments with embeddings; the current adapter drops those embeddings. Preserve usable descriptors with their embedding model identity. Validate dimensions, finite values, nonzero magnitude, and sufficient speech before accepting descriptors. Never compare incompatible model representations.
 
 Use normalized similarity with both a minimum match threshold and a minimum margin over the next candidate. Thresholds are policy parameters, not probabilities. Validate them against real recordings before claiming recognition accuracy. Reject ambiguous and insufficient evidence rather than assigning a name.
 

@@ -1,7 +1,7 @@
 import Foundation
 import Observation
-import TranslixModel
-import TranslixSummarize
+import TranlixModel
+import TranlixSummarize
 
 /// User preferences, kept in `UserDefaults`.
 ///
@@ -58,6 +58,17 @@ final class SettingsStore {
         }
     }
 
+    /// Whether the small control that floats over other apps appears while a session runs.
+    ///
+    /// On by default: a recording usually happens behind the call it is recording, and this is
+    /// what keeps the clock and Pausar in reach without bringing the window forward.
+    var showFloatingRecorder: Bool {
+        didSet {
+            guard showFloatingRecorder != oldValue else { return }
+            UserDefaults.standard.set(showFloatingRecorder, forKey: Self.showFloatingRecorderKey)
+        }
+    }
+
     /// The limits offered, in hours.
     static let recordingLimitOptions = [1, 2, 3, 4, 6, 8, 12]
 
@@ -72,6 +83,7 @@ final class SettingsStore {
     private static let templateIDsKey = "notesTemplateIDs"
     private static let notesLanguageKey = "notesLanguage"
     private static let recordingLimitKey = "recordingLimitHours"
+    private static let showFloatingRecorderKey = "showFloatingRecorder"
 
     /// The one-template-for-everything preference, read only to migrate it.
     private static let legacyTemplateKey = "defaultTemplateID"
@@ -83,6 +95,9 @@ final class SettingsStore {
             .flatMap(NotesLanguage.init(rawValue:)) ?? .default
         templateIDs = Self.loadTemplateIDs()
         recordingLimitHours = Self.loadRecordingLimitHours()
+        // Not `bool(forKey:)`: that reads false when nothing was ever stored.
+        showFloatingRecorder = UserDefaults.standard
+            .object(forKey: Self.showFloatingRecorderKey) as? Bool ?? true
     }
 
     /// A Mac that never chose gets the default; one that chose "never" stored a zero.

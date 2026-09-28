@@ -1,0 +1,128 @@
+import Foundation
+import TranlixDiarize
+import TranlixModel
+import TranlixTranscribe
+
+/// Where a run is, as one value covering all three stages.
+///
+/// One type instead of three so the UI has one progress strip to draw and one thing to switch
+/// on. The per-stage phases are carried rather than flattened: each already knows how to
+/// describe itself, and re-deriving that here would mean two places to keep in step.
+public enum PipelinePhase: Sendable, Equatable {
+    case transcribing(TranscriptionPhase)
+    case diarizing(DiarizationPhase)
+    case recognizingVoices(fraction: Double)
+
+    /// Working out whether this was a class, a meeting or something else.
+    ///
+    /// Part of the notes stage rather than a stage of its own: it cannot be run on its own,
+    /// and promoting it would leak into `ChainPlanner`, `SessionState` and the manual buttons
+    /// for something that takes a second and a half.
+    case classifying
+
+    case namingWarning(String)
+    case writingNotes
+    case finished
+
+    public var stage: PipelineStage? {
+        switch self {
+        case .transcribing: .transcription
+        case .diarizing: .diarization
+        case .recognizingVoices: .diarization
+        case .classifying, .writingNotes, .namingWarning: .notes
+        case .finished: nil
+        }
+    }
+
+    /// One line saying what is actually happening.
+    ///
+    /// The stage name alone is not enough, and the gap is not cosmetic: an hour-long session
+    /// is a dozen requests, and "Transcribiendo" sitting unchanged for twenty minutes reads as
+    /// a hang, because from the outside it is indistinguishable from one.
+    ///
+    /// Written here rather than in the view so the wording is tested and cannot drift between
+    /// the places that show progress.
+    public var detail: String {
+        switch self {
+        case let .transcribing(phase): Self.transcriptionDetail(phase)
+        case let .diarizing(phase): Self.diarizationDetail(phase)
+        case let .recognizingVoices(fraction): "Recognizing saved voices… \(Int(fraction * 100))%"
+        case .classifying: "Viendo de qué se trata la grabación…"
+        case .writingNotes: "Escribiendo las notas…"
+        case let .namingWarning(message): message
+        case .finished: "Listo"
+        }
+    }
+
+    private static func transcriptionDetail(_ phase: TranscriptionPhase) -> String {
+        switch phase {
+        case .preparingUpload:
+            "Preparando el audio para subir…"
+        case let .uploading(batch, _):
+            "Subiendo \(batch.track.spokenName), bloque \(batch.index) de \(batch.total)…"
+        case let .waitingRemote(batch, _):
+            // This line used to promise the lid could be closed. It was not true: DeepInfra's
+            // endpoint is one blocking request, and sleep kills it. What replaces it is the
+            // property the batching was built to give, and that one is true.
+            "Transcribiendo el bloque \(batch.index) de \(batch.total) en el servidor. "
+                + "Si se corta, se retoma desde este bloque."
+        case let .retryingRemote(batch, attempt, of, _):
+            "Reintentando el bloque \(batch.index) (intento \(attempt) de \(of))…"
+        case .archiving:
+            "Comprimiendo el audio y verificando antes de borrar los fragmentos…"
+        case .finished:
+            "Transcripción lista"
+        }
+    }
+
+    private static func diarizationDetail(_ phase: DiarizationPhase) -> String {
+        switch phase {
+        case let .preparingModel(fraction):
+            "Descargando el modelo de voces… \(Int(fraction * 100))%"
+        case let .separatingVoices(fraction):
+            "Separando voces… \(Int(fraction * 100))%"
+        case .merging:
+            "Asignando cada frase a su hablante…"
+        case .finished:
+            "Voces separadas"
+        }
+    }
+
+    /// Share of this stage that is done, 0...1.
+    public var stageFraction: Double {
+        switch self {
+        case let .transcribing(phase): phase.fraction
+        case let .diarizing(phase): phase.fraction
+        case let .recognizingVoices(fraction): fraction
+        case .classifying: 0.2
+        case .writingNotes: 0.6
+        case .namingWarning: 1
+        case .finished: 1
+        }
+    }
+
+    /// How much of the whole run is done, given which stages this run is actually doing.
+    ///
+    /// Weighted rather than even thirds: transcription is most of the wall clock, and a bar
+    /// that jumps from 33% to 66% while nothing visible happens teaches people to distrust it.
+    public func fraction(over stages: [PipelineStage]) -> Double {
+        guard !stages.isEmpty else { return 1 }
+        guard let stage, let index = stages.firstIndex(of: stage) else { return 1 }
+
+        let weights = stages.map(\.chainWeight)
+        let total = weights.reduce(0, +)
+        let before = weights[..<index].reduce(0, +)
+        return (before + weights[index] * stageFraction) / total
+    }
+}
+
+public extension PipelineStage {
+    /// Rough share of a run's wall clock. Transcription dominates; notes is one API call.
+    var chainWeight: Double {
+        switch self {
+        case .transcription: 0.7
+        case .diarization: 0.2
+        case .notes: 0.1
+        }
+    }
+}

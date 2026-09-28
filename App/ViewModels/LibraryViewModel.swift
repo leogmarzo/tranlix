@@ -1,7 +1,7 @@
 import Foundation
 import Observation
-import TranslixModel
-import TranslixStore
+import TranlixModel
+import TranlixStore
 
 /// The session list, rebuilt by scanning the recordings folder.
 ///

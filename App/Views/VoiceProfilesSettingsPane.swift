@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
-import TranslixModel
-import TranslixStore
+import TranlixModel
+import TranlixStore
 
 struct VoiceProfilesSettingsPane: View {
     let environment: AppEnvironment
@@ -55,7 +55,7 @@ struct VoiceProfilesSettingsPane: View {
                                     Spacer()
                                     Button("Open recording") {
                                         environment.navigation.selection = .session(session.id)
-                                        openWindow(id: TranslixApp.mainWindowID)
+                                        openWindow(id: TranlixApp.mainWindowID)
                                     }
                                 }
                                 .font(.caption).foregroundStyle(.secondary)

@@ -1,4 +1,4 @@
-# Translix
+# Tranlix
 
 macOS app that records online classes and meetings, transcribes them with speakers
 separated, and produces notes through an LLM.
@@ -28,10 +28,10 @@ always derivable and re-runnable, so no recording is ever lost because a later s
 ```bash
 scripts/run.sh      # generate the project, build, and launch
 scripts/build.sh    # generate and build only
-scripts/test.sh     # run the TranslixKit unit tests
+scripts/test.sh     # run the TranlixKit unit tests
 ```
 
-`Translix.xcodeproj` is generated from `project.yml` and is not committed. Run
+`Tranlix.xcodeproj` is generated from `project.yml` and is not committed. Run
 `xcodegen generate` after changing the project layout, or just use the scripts above.
 
 ### First build
@@ -52,9 +52,9 @@ ScreenCaptureKit, which is what Apple recommends when only audio is needed.
 
 The bundle id `com.leomarzo.tranlix` and the signing identity are deliberately fixed. TCC
 keys permission grants to that pair, so changing either makes macOS revoke the granted
-permissions on the next build. That is also why the bundle id still spells the app's former
-name: it survived the rename to Translix untouched, along with the keychain services holding
-the Anthropic and DeepInfra keys and the notarization profile used by `scripts/release.sh`.
+permissions on the next build. The same goes for the keychain services holding the Anthropic
+and DeepInfra keys and the notarization profile used by `scripts/release.sh`: each is filed
+under its exact name, and renaming it would silently orphan what is stored.
 
 What leaves the machine is explicit and audited: generating notes sends the transcript to
 Anthropic (recorded as `transcriptSharedAt`), and transcribing uploads the recording itself
@@ -67,14 +67,14 @@ speaker separation and voice recognition stay on the machine.
 project.yml              XcodeGen spec — the single source of truth for the app target
 App/                     SwiftUI shell: views, view models, Info.plist, entitlements
 App/AppIcon.icon/        Icon Composer bundle: icon.json plus the SVG layers it composes
-Packages/TranslixKit/     all logic, as a local Swift package
-  TranslixModel           Codable types; the on-disk contract. A leaf with no dependencies
-  TranslixStore           session folders, atomic manifest I/O, library scan, recovery
-  TranslixCapture         Core Audio tap + AVAudioEngine mic, chunk writing, coordination
-  TranslixTranscribe      DeepInfra engine, batched upload with retries, hallucination filter
-  TranslixDiarize         speaker turns and merge into a single timeline
-  TranslixSummarize       Anthropic client, prompt templates, Keychain
-  TranslixExport          Markdown rendering
+Packages/TranlixKit/     all logic, as a local Swift package
+  TranlixModel           Codable types; the on-disk contract. A leaf with no dependencies
+  TranlixStore           session folders, atomic manifest I/O, library scan, recovery
+  TranlixCapture         Core Audio tap + AVAudioEngine mic, chunk writing, coordination
+  TranlixTranscribe      DeepInfra engine, batched upload with retries, hallucination filter
+  TranlixDiarize         speaker turns and merge into a single timeline
+  TranlixSummarize       Anthropic client, prompt templates, Keychain
+  TranlixExport          Markdown rendering
 scripts/                 build, test, run
 ```
 
@@ -86,7 +86,7 @@ describes something real rather than a scaffold of empty directories.
 ### Remembering people across meetings
 
 In a meeting's speaker inspector, enter a name and select **Remember for future meetings**.
-Translix stores a local voice profile and compares it with speakers in later recordings,
+Tranlix stores a local voice profile and compares it with speakers in later recordings,
 before generating notes. Strong, unambiguous matches receive the saved name automatically;
 uncertain matches appear as suggestions to confirm or dismiss. Manual names and corrections
 take priority. Automatic matches never train new profiles on their own.
@@ -96,7 +96,7 @@ recognition; existing meeting names remain intact. Profiles live in `voice-profi
 at the recordings-library root. Moving to another library selects its own profile registry.
 The microphone's self-speaker is excluded from enrollment.
 
-When generating notes, Translix can fill an unnamed participant's label from an explicit
+When generating notes, Tranlix can fill an unnamed participant's label from an explicit
 self-introduction in their transcript. This uses the same notes request, preserves manual
 names and saved-person recognition, and marks the result **Inferred from notes** in the
 speaker inspector. Uncertain names remain blank. Edit the inferred name if needed; choosing
