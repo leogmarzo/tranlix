@@ -150,14 +150,14 @@ struct SummaryPipelineTests {
                     transcript: "Persona 1: hola",
                     instruction: "Resumí",
                     title: "Resumen de clase",
-                    model: "claude-opus-5",
+                    model: "claude-sonnet-5",
                     userConfirmedSharing: true,
                     now: epoch
                 )
 
             let written = try String(contentsOf: note.url, encoding: .utf8)
             #expect(written.contains("# Resumen de clase"))
-            #expect(written.contains("claude-opus-5"))
+            #expect(written.contains("claude-sonnet-5"))
             #expect(written.contains("## Temas"))
             #expect(note.url.deletingLastPathComponent().lastPathComponent == "notas")
             #expect(await handle.notes().count == 1)
