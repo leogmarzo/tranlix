@@ -78,14 +78,14 @@ public actor SummaryPipeline {
         let metadataInstruction = !eligible.isEmpty
             ? SummaryMetadata.instruction(eligibleIDs: eligible, needsTitle: needsTitle)
             : (needsTitle ? Self.titleInstruction : "")
-        let response = try await provider.summarize(
+        let reply = try await provider.summarize(
             SummaryRequest(
                 instruction: metadataInstruction.isEmpty ? instruction : metadataInstruction + "\n\n" + instruction,
                 transcript: transcript, model: model
             )
         )
         try Task.checkCancellation()
-        let parsed = SummaryMetadata.parse(response)
+        let parsed = SummaryMetadata.parse(reply.text)
         let sessionTitle = needsTitle ? parsed.title : nil
         let markdown = parsed.markdown
         guard !markdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -93,7 +93,8 @@ public actor SummaryPipeline {
         }
 
         let document = Self.document(
-            markdown: markdown, title: title, model: model, generatedAt: now
+            markdown: markdown, title: title, model: model, generatedAt: now,
+            isTruncated: reply.isTruncated
         )
         let url = try await handle.writeNote(
             markdown: document, fileName: Self.fileName(title: title, at: now)
@@ -190,21 +191,31 @@ public actor SummaryPipeline {
     /// A note found in a folder a year later should explain itself: which prompt produced it,
     /// which model wrote it, and when. Otherwise two notes for the same session are
     /// indistinguishable.
+    ///
+    /// A note the model could not finish says so at the end, where the reader notices the
+    /// cut. Kept rather than discarded — most of a note is still worth reading — but never
+    /// passed off as whole.
     static func document(
         markdown: String,
         title: String,
         model: String,
-        generatedAt: Date
+        generatedAt: Date,
+        isTruncated: Bool = false
     ) -> String {
-        """
+        let body = markdown.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ending = isTruncated ? "\n\n---\n\n\(truncationNotice)" : ""
+        return """
         # \(title)
 
         _Generado el \(displayFormatter.string(from: generatedAt)) con \(model)._
 
-        \(markdown.trimmingCharacters(in: .whitespacesAndNewlines))
+        \(body)\(ending)
 
         """
     }
+
+    static let truncationNotice =
+        "_⚠️ Estas notas quedaron incompletas: el modelo llegó a su límite de extensión antes de terminar. Usá Regenerar para volver a generarlas._"
 
     private static var displayFormatter: DateFormatter {
         let formatter = DateFormatter()

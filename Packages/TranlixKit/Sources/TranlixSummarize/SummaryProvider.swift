@@ -13,11 +13,20 @@ public struct SummaryRequest: Sendable, Equatable {
 
     public var maxTokens: Int
 
+    /// The output ceiling for notes.
+    ///
+    /// It used to be 8,000, and an hour and a half of meeting overran it: the answer came back
+    /// cut mid-word and was filed as if it were whole. The ceiling also covers the model's
+    /// thinking, which Opus does by default, so a dense note has less room than it looks.
+    /// 64,000 is the most every offered model accepts; the request streams, so a long
+    /// answer does not run into the HTTP timeout.
+    public static let defaultMaxTokens = 64000
+
     public init(
         instruction: String,
         transcript: String,
         model: String = SummaryModel.default.identifier,
-        maxTokens: Int = 8000
+        maxTokens: Int = SummaryRequest.defaultMaxTokens
     ) {
         self.instruction = instruction
         self.transcript = transcript
@@ -94,10 +103,26 @@ public enum SummaryError: Error, LocalizedError, Equatable {
     }
 }
 
+/// What came back.
+public struct SummaryReply: Sendable, Equatable {
+    public var text: String
+
+    /// The model hit `maxTokens` before it finished, so `text` stops mid-answer.
+    ///
+    /// Carried rather than thrown: a cut note is still most of a note, and the caller decides
+    /// whether to keep it — but it must never be mistaken for a whole one.
+    public var isTruncated: Bool
+
+    public init(text: String, isTruncated: Bool = false) {
+        self.text = text
+        self.isTruncated = isTruncated
+    }
+}
+
 /// Turns a transcript into notes.
 ///
 /// A protocol with one implementation, because the implementation talks to the network and
 /// the tests must not. Everything above this line is exercised against a stub.
 public protocol SummaryProvider: Sendable {
-    func summarize(_ request: SummaryRequest) async throws -> String
+    func summarize(_ request: SummaryRequest) async throws -> SummaryReply
 }

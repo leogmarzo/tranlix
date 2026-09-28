@@ -101,8 +101,8 @@ struct AutomaticTitleTests {
 
 private struct RenamingProvider: SummaryProvider {
     let handle: SessionHandle
-    func summarize(_ request: SummaryRequest) async throws -> String {
+    func summarize(_ request: SummaryRequest) async throws -> SummaryReply {
         try await handle.setTitle("My title")
-        return "<session-title>Generated title</session-title>\n## Decisions\nKeep this."
+        return SummaryReply(text: "<session-title>Generated title</session-title>\n## Decisions\nKeep this.")
     }
 }

@@ -150,7 +150,7 @@ public struct ModelSessionClassifier: SessionClassifier {
             // A kind, a number and one sentence. Anything longer is the model ignoring the
             // format, which the parser handles anyway.
             maxTokens: 300
-        ))
+        )).text
 
         // A transport failure throws out of here and the caller decides what that costs. An
         // unreadable answer does not: the call succeeded, it just said nothing.
