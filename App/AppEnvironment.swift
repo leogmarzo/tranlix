@@ -20,19 +20,13 @@ final class AppEnvironment {
     let people: PeopleViewModel
     private(set) var coordinator: RecordingCoordinator
 
-    /// Shared so a loaded Whisper model outlives the session that loaded it, instead of
-    /// costing seconds and a gigabyte again on the next one.
+    /// The one transcription engine: Whisper large-v3 on DeepInfra.
     ///
-    /// The AssemblyAI key is read from the keychain on every use rather than captured once,
-    /// so pasting a key in Settings takes effect without relaunching.
-    let engines = TranscriptionEngineRegistry(
-        assemblyAIKey: {
-            (try? APIKeyStore(service: AssemblyAIEngine.keychainService).read()) ?? nil
-        },
-        deepInfraKey: {
-            (try? APIKeyStore(service: DeepInfraEngine.keychainService).read()) ?? nil
-        }
-    )
+    /// The key is read from the keychain on every use rather than captured once, so pasting a
+    /// key in Settings takes effect without relaunching.
+    let transcriber = DeepInfraEngine(apiKey: {
+        (try? APIKeyStore(service: DeepInfraEngine.keychainService).read()) ?? nil
+    })
 
     /// Shared for the same reason, and because the models are cheap enough to keep resident.
     let diarizer = FluidAudioDiarizer()

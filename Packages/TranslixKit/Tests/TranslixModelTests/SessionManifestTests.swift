@@ -123,6 +123,35 @@ struct SessionManifestTests {
         #expect(decoded.schemaVersion == SessionManifest.currentSchemaVersion)
     }
 
+    @Test("sessions transcribed by the retired engines still load")
+    func decodesRetiredEngines() throws {
+        // The on-device engines and AssemblyAI are gone from the app, but the sessions they
+        // transcribed are still on disk and still name them. The engine is a plain string for
+        // exactly this reason: a closed set here would stop those sessions from opening.
+        for (engine, diarizer) in [
+            ("whisperkit", "fluidaudio"), ("apple", "fluidaudio"), ("assemblyai", "assemblyai"),
+        ] {
+            let json = """
+            {
+              "id": "6C9B1A5E-0000-4000-8000-000000000000",
+              "createdAt": 0,
+              "state": "ready",
+              "transcriptionEngine": "\(engine)",
+              "diarization": {
+                "diarizerID": "\(diarizer)",
+                "generatedAt": 0,
+                "speakerCount": 2
+              }
+            }
+            """
+            let decoded = try JSONDecoder().decode(SessionManifest.self, from: Data(json.utf8))
+
+            #expect(decoded.transcriptionEngine == engine)
+            #expect(decoded.diarization?.diarizerID == diarizer)
+            #expect(decoded.state == .ready)
+        }
+    }
+
     // MARK: - Timeline alignment
 
     @Test("the track that delivered audio first defines the session start")

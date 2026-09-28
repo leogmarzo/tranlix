@@ -179,66 +179,6 @@ struct AudioArchiverTests {
         }
     }
 
-    // MARK: - Splitting back
-
-    @Test("an archive splits back into chunks that account for all of it")
-    func splitsArchiveBackIntoChunks() async throws {
-        try await withTemporaryRoot { root in
-            let layout = try layout(in: root)
-            let chunks = try (0 ..< 3).map {
-                try writeChunk(track: .system, index: $0, frames: 16000, into: layout)
-            }
-            try AudioArchiver.archive(
-                track: .system, chunks: chunks, layout: layout, sampleRate: sampleRate
-            )
-
-            let scratch = root.appending(path: "scratch")
-            let pieces = try AudioArchiver.split(
-                archive: layout.archiveURL(track: .system),
-                track: .system,
-                framesPerChunk: 16000,
-                into: scratch
-            )
-
-            #expect(pieces.count >= 3)
-            #expect(pieces.map(\.chunk.index) == Array(0 ..< pieces.count))
-            for piece in pieces {
-                #expect(FileManager.default.exists(piece.url))
-                let file = try AVAudioFile(forReading: piece.url)
-                #expect(file.length == piece.chunk.frameCount)
-            }
-            // Positions are contiguous, so the pieces reconstruct one continuous timeline.
-            var expectedStart: Int64 = 0
-            for piece in pieces {
-                #expect(piece.chunk.startFrame == expectedStart)
-                expectedStart += piece.chunk.frameCount
-            }
-        }
-    }
-
-    @Test("splitting is what keeps re-transcription resumable after the chunks are gone")
-    func splitSurvivesChunkDeletion() async throws {
-        try await withTemporaryRoot { root in
-            let layout = try layout(in: root)
-            let chunks = [try writeChunk(track: .mic, index: 0, frames: 48000, into: layout)]
-            try AudioArchiver.archive(
-                track: .mic, chunks: chunks, layout: layout, sampleRate: sampleRate
-            )
-            AudioArchiver.removeChunks(chunks, layout: layout)
-
-            let pieces = try AudioArchiver.split(
-                archive: layout.archiveURL(track: .mic),
-                track: .mic,
-                framesPerChunk: 16000,
-                into: root.appending(path: "scratch")
-            )
-
-            #expect(pieces.count >= 3)
-            let total = pieces.reduce(Int64(0)) { $0 + $1.chunk.frameCount }
-            #expect(abs(total - 48000) < Int64(sampleRate)) // within a second of the original
-        }
-    }
-
     @Test("encoding an arbitrary subset of chunks yields exactly that much audio")
     func encodesASubsetOfChunks() async throws {
         try await withTemporaryRoot { root in

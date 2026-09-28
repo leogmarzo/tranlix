@@ -36,12 +36,7 @@ public struct RemoteBatch: Sendable, Equatable {
 /// alternative is a public API whose most natural use segfaults for anyone outside this
 /// module.
 public indirect enum TranscriptionPhase: Sendable, Equatable {
-    /// Downloading or loading the model. Can take minutes on a first run.
-    case preparingEngine(fraction: Double)
-
-    case transcribing(completed: Int, total: Int, reused: Int)
-
-    /// Planning the batches before the first one goes up. Remote engines only.
+    /// Planning the batches before the first one goes up.
     ///
     /// Reported once, before the loop. Its fraction sits below `uploading`'s floor, so
     /// repeating it between batches would walk the bar backwards — which is why each batch's
@@ -65,9 +60,6 @@ public indirect enum TranscriptionPhase: Sendable, Equatable {
 
     public var fraction: Double {
         switch self {
-        case let .preparingEngine(fraction): fraction * 0.1
-        case let .transcribing(completed, total, _):
-            total == 0 ? 0.9 : 0.1 + 0.8 * Double(completed) / Double(total)
         case .preparingUpload: 0.05
         case let .uploading(_, fraction): 0.1 + 0.8 * fraction
         case let .waitingRemote(_, fraction): 0.1 + 0.8 * fraction
@@ -80,35 +72,23 @@ public indirect enum TranscriptionPhase: Sendable, Equatable {
     }
 }
 
-/// Transcribes a session chunk by chunk and archives its audio afterwards.
+/// Transcribes a session batch by batch and archives its audio afterwards.
 ///
 /// The two properties this exists to guarantee:
 ///
-/// Transcription is resumable. Every chunk's result is written the moment it lands, keyed by
-/// engine, locale and the bytes it came from. A failure on chunk 10 of 12 costs one chunk,
-/// not twelve, and switching engines does not invalidate the other engine's work.
+/// Transcription is resumable. Every batch's result is written the moment it lands, keyed by
+/// engine, locale and the range of the recording it came from. A server that goes quiet on
+/// batch ten of twelve costs one batch, not twelve.
 ///
 /// Audio survives until it is provably replaced. Chunks are deleted only after the compressed
-/// archive has been reopened and measured, and re-transcription after that point splits the
-/// archive back into chunks so it stays resumable for the rest of the recording's life.
+/// archive has been reopened and measured, and re-transcription after that point cuts each
+/// batch back out of the archive.
 public actor TranscriptionPipeline {
     private let engine: any TranscriptionEngine
-    private let splitChunkSeconds: Double
 
-    /// - Parameter splitChunkSeconds: how finely an archived session is cut back into pieces
-    ///   when it is re-transcribed. Matches the capture chunk length by default; smaller
-    ///   values make resuming finer-grained at the cost of more per-chunk overhead.
-    public init(
-        engine: any TranscriptionEngine,
-        splitChunkSeconds: Double = TranscriptionPipeline.defaultSplitChunkSeconds
-    ) {
+    public init(engine: any TranscriptionEngine) {
         self.engine = engine
-        self.splitChunkSeconds = splitChunkSeconds
     }
-
-    /// Matches the capture chunk length, so a re-run over the original CAFs lines up with the
-    /// results already stored instead of invalidating all of them.
-    public static let defaultSplitChunkSeconds: Double = 300
 
     // MARK: - Whole pipeline
 
@@ -164,9 +144,8 @@ public actor TranscriptionPipeline {
         // that was `.automatic`, narrows to a fixed one as soon as anything knows better.
         //
         // A language resolved on an earlier run stands in from the start. That keeps the
-        // cached chunks — filed under the resolved language, not under the nothing that was
-        // requested — reusable, and it lets an engine that cannot detect re-run a session
-        // whose language another engine already worked out.
+        // cached batches — filed under the resolved language, not under the nothing that was
+        // requested — reusable.
         var effective = language
         if language == .automatic,
            let resolved = ResolvedLanguage.supported(
@@ -175,12 +154,7 @@ public actor TranscriptionPipeline {
             effective = .fixed(resolved)
         }
 
-        switch await engine.availability(for: effective) {
-        case .ready:
-            break
-        case .needsDownload:
-            try await engine.prepare(for: effective) { progress(.preparingEngine(fraction: $0)) }
-        case let .unsupported(reason):
+        if case let .unsupported(reason) = await engine.availability(for: effective) {
             throw TranscriptionError.languageNotSupported(reason, engine: engine.displayName)
         }
 
@@ -188,126 +162,7 @@ public actor TranscriptionPipeline {
         // on its own, and setting the same state twice writes the same bytes.
         try await handle.setState(.transcribing)
 
-        // A track-level engine takes whole tracks and brings the speakers with them, so the
-        // chunk loop below — and the local diarizer after it — have nothing to add.
-        if let remote = engine as? TrackTranscribing {
-            return try await transcribeTracks(
-                remote, session: handle, language: effective, progress: progress
-            )
-        }
-
-        // Scratch space for chunks rebuilt from an archive. Removed however this ends.
-        let scratch = URL(filePath: NSTemporaryDirectory())
-            .appending(path: "translix-split-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: scratch) }
-
-        let manifest = await handle.manifest
-        let layout = await handle.layout
-        var work: [(track: AudioTrack, chunk: ChunkRef, url: URL)] = []
-        for track in AudioTrack.allCases {
-            work += try sources(for: track, manifest: manifest, layout: layout, scratch: scratch)
-        }
-
-        let total = work.count
-        var completed = 0
-        var reused = 0
-        var segments: [TranscriptSegment] = []
-        progress(.transcribing(completed: 0, total: total, reused: 0))
-
-        for item in work {
-            // Between chunks, which bounds a cancellation to one chunk's work. Each finished
-            // chunk is already persisted, so stopping here costs nothing on the next run.
-            try Task.checkCancellation()
-
-            let fingerprint = Self.fingerprint(of: item.url, frameCount: item.chunk.frameCount)
-            let cached = await handle.chunkTranscript(
-                engineID: engine.id.rawValue, track: item.track, chunkIndex: item.chunk.index
-            )
-
-            let chunkSegments: [TranscriptSegment]
-            if let cached, cached.matches(
-                engineID: engine.id.rawValue,
-                localeIdentifier: effective.identifier,
-                chunkFingerprint: fingerprint
-            ) {
-                chunkSegments = cached.segments
-                reused += 1
-            } else {
-                let result = try await engine.transcribe(
-                    chunk: item.url, language: effective, track: item.track
-                )
-                chunkSegments = result.segments
-
-                // Narrowed before the result is filed, so this chunk is stored under the
-                // language it turned out to be rather than under the request that had none.
-                // Otherwise the next run would resolve the language, miss on every cached
-                // chunk, and transcribe the whole session again.
-                //
-                // Only a guess worth believing narrows it. A chunk that decoded silence, or
-                // one that named a language the app does not support, leaves the run
-                // automatic so the next chunk gets to answer instead.
-                if effective == .automatic,
-                   let detected = ResolvedLanguage.pinnable(
-                       detected: result.detectedLanguage, from: chunkSegments
-                   ) {
-                    effective = .fixed(detected)
-                }
-
-                // Persisted before moving on, which is the whole basis of resuming.
-                try await handle.writeChunkTranscript(ChunkTranscript(
-                    chunkIndex: item.chunk.index,
-                    track: item.track,
-                    engineID: engine.id.rawValue,
-                    localeIdentifier: effective.identifier,
-                    chunkFingerprint: fingerprint,
-                    generatedAt: Date(),
-                    segments: chunkSegments
-                ))
-            }
-
-            // Chunk-relative times become session-absolute here, and only here: the engine
-            // knows nothing of where its chunk sits, and the stored result stays reusable
-            // regardless of what the rest of the session looks like.
-            let offset = manifest.sessionStart(of: item.chunk, on: item.track)
-            segments += chunkSegments.map { segment in
-                var shifted = segment
-                shifted.start += offset
-                shifted.end += offset
-                shifted.words = segment.words.map {
-                    TranscriptWord(text: $0.text, start: $0.start + offset, end: $0.end + offset)
-                }
-                return shifted
-            }
-
-            completed += 1
-            progress(.transcribing(completed: completed, total: total, reused: reused))
-        }
-
-        // What the model wrote over silence is dropped here, once every chunk of a track has
-        // arrived: a phrase Whisper loops on appears once or twice per chunk, and only the
-        // whole track shows it for what it is. The chunks keep the engine's own answer on
-        // disk, so this costs no re-transcription and stays reversible.
-        segments = HallucinationFilter.filtered(segments)
-
-        // Both tracks interleaved into one chronological timeline.
-        segments.sort { $0.start < $1.start }
-
-        let transcript = Transcript(
-            engineID: engine.id.rawValue,
-            localeIdentifier: effective.identifier,
-            generatedAt: Date(),
-            segments: segments
-        )
-        try await handle.writeTranscript(transcript)
-
-        let engineID = engine.id.rawValue
-        let localeIdentifier = effective.identifier
-        try await handle.update { manifest in
-            manifest.state = .transcribed
-            manifest.transcriptionEngine = engineID
-            manifest.resolvedLocaleIdentifier = localeIdentifier
-        }
-        return transcript
+        return try await transcribeBatches(session: handle, language: effective, progress: progress)
     }
 
     // MARK: - Batches
@@ -328,9 +183,8 @@ public actor TranscriptionPipeline {
     /// Cuts a track into batches no longer than the engine will take in one request.
     ///
     /// Accumulated by frame count rather than computed from an index. The last chunk of every
-    /// track is whatever was left when recording stopped, and a re-run over a split archive
-    /// produces chunks of the splitter's size, so multiplying an index by the nominal chunk
-    /// length would cut in the wrong places.
+    /// track is whatever was left when recording stopped, and a pause closes a chunk early,
+    /// so multiplying an index by the nominal chunk length would cut in the wrong places.
     static func batches(
         chunks: [ChunkRef],
         sampleRate: Double,
@@ -377,9 +231,8 @@ public actor TranscriptionPipeline {
         "batch-\(startFrame)-\(frameCount)"
     }
 
-    /// The remote path: one request per batch, each filed the moment it lands.
-    private func transcribeTracks(
-        _ remote: any TrackTranscribing,
+    /// One request per batch, each filed the moment it lands.
+    private func transcribeBatches(
         session handle: SessionHandle,
         language: TranscriptionLanguage,
         progress: @escaping @Sendable (TranscriptionPhase) -> Void
@@ -397,7 +250,6 @@ public actor TranscriptionPipeline {
 
         var effective = language
         var perTrack: [AudioTrack: [TranscriptSegment]] = [:]
-        var systemTurns: [SpeakerTurn] = []
 
         // Compatibility. Before batching, a whole track was filed at chunk zero under
         // `frames-…`. Reading it here is what keeps a session transcribed by that version
@@ -415,17 +267,6 @@ public actor TranscriptionPipeline {
             alreadyWhole.insert(track)
             let offset = manifest.offset(for: track)
             perTrack[track] = legacy.segments.map { Self.shift($0, by: offset) }
-            if track == .system {
-                systemTurns += legacy.segments.compactMap { segment in
-                    segment.speakerID.map {
-                        SpeakerTurn(
-                            speakerID: $0,
-                            start: segment.start + offset,
-                            end: segment.end + offset
-                        )
-                    }
-                }
-            }
         }
 
         // Honor cached frame ranges before applying the current upload ceiling. A smaller
@@ -438,7 +279,7 @@ public actor TranscriptionPipeline {
             func flushPending() {
                 plan += Self.batches(
                     chunks: pending, sampleRate: manifest.sampleRate,
-                    maxSeconds: remote.maxUploadSeconds
+                    maxSeconds: engine.maxUploadSeconds
                 ).map { UploadBatch(track: track, chunks: $0) }
                 pending = []
             }
@@ -497,7 +338,6 @@ public actor TranscriptionPipeline {
             )
 
             let batchSegments: [TranscriptSegment]
-            let batchTurns: [SpeakerTurn]
 
             if let cached, cached.matches(
                 engineID: engine.id.rawValue,
@@ -505,16 +345,6 @@ public actor TranscriptionPipeline {
                 chunkFingerprint: fingerprint
             ) {
                 batchSegments = cached.segments
-                // On this path a turn and a segment are the same utterance, so a cached batch
-                // rebuilds its turns instead of storing a second copy. Only the per-utterance
-                // confidence is lost, and only on a re-run.
-                batchTurns = batch.track == .system
-                    ? cached.segments.compactMap { segment in
-                        segment.speakerID.map {
-                            SpeakerTurn(speakerID: $0, start: segment.start, end: segment.end)
-                        }
-                    }
-                    : []
             } else {
                 let file = try batchAudio(
                     batch, manifest: manifest, layout: layout, scratch: scratch
@@ -525,7 +355,7 @@ public actor TranscriptionPipeline {
                 try await handle.recordAudioShared(at: Date())
 
                 let done = Double(position)
-                let result = try await remote.transcribe(
+                let result = try await engine.transcribe(
                     trackFile: file, track: batch.track, language: effective
                 ) { phase in
                     switch phase {
@@ -543,10 +373,9 @@ public actor TranscriptionPipeline {
                     }
                 }
 
-                // Narrowed before the result is filed, exactly as the chunk loop does, so the
-                // batches after this one and any re-run are keyed under the language the
-                // session turned out to be — and, exactly as the chunk loop does, only when
-                // the batch is worth believing. This is the line that pinned a meeting to
+                // Narrowed before the result is filed, so the batches after this one and any
+                // re-run are keyed under the language the session turned out to be — and only
+                // when the batch is worth believing. This is the line that pinned a meeting to
                 // Ukrainian because the microphone track happened to go first and happened to
                 // be a person listening in silence.
                 if effective == .automatic,
@@ -568,28 +397,17 @@ public actor TranscriptionPipeline {
                     segments: result.segments
                 ))
                 batchSegments = result.segments
-                batchTurns = result.turns
             }
 
             // Batch-relative times become session-absolute here, and only here. What is
-            // stored stays batch-relative, the same rule the chunk path follows.
+            // stored stays batch-relative, so it is reusable regardless of what the rest of the
+            // session looks like.
             //
             // `sessionStart` adds where the batch begins within its track as well as the
             // track's own alignment against the other one. For a batch that covers a whole
-            // track it reduces to exactly the track offset the previous version used, so an
-            // engine that still wants whole tracks lands on identical numbers.
+            // track it reduces to exactly the track offset.
             let offset = manifest.sessionStart(of: batch.chunks[0], on: batch.track)
             perTrack[batch.track, default: []] += batchSegments.map { Self.shift($0, by: offset) }
-            if batch.track == .system {
-                systemTurns += batchTurns.map {
-                    SpeakerTurn(
-                        speakerID: $0.speakerID,
-                        start: $0.start + offset,
-                        end: $0.end + offset,
-                        confidence: $0.confidence
-                    )
-                }
-            }
         }
 
         // What the model wrote over silence is dropped here rather than before the store, so
@@ -609,24 +427,6 @@ public actor TranscriptionPipeline {
             segments: merged
         )
         try await handle.writeTranscript(transcript)
-
-        // The speakers came with the transcript, so diarization is done the moment it is.
-        // Stored in exactly the shape FluidAudio would have left, which is what keeps the
-        // rename sheet and every later run indifferent to which of the two produced it.
-        if !systemTurns.isEmpty {
-            let diarization = Diarization(
-                diarizerID: engine.id.rawValue,
-                generatedAt: Date(),
-                audioFingerprint: Self.trackFingerprint(manifest.track(.system)),
-                turns: systemTurns.sorted { $0.start < $1.start }
-            )
-            try await handle.writeDiarization(diarization)
-            try await handle.setDiarizationInfo(DiarizationInfo(
-                diarizerID: diarization.diarizerID,
-                generatedAt: diarization.generatedAt,
-                speakerCount: diarization.speakerIDs.count
-            ))
-        }
 
         let engineID = engine.id.rawValue
         let localeIdentifier = effective.identifier
@@ -654,8 +454,8 @@ public actor TranscriptionPipeline {
     /// Produces one file holding exactly this batch's audio.
     ///
     /// Materialised lazily, per batch, only on a cache miss. Splitting the whole archive up
-    /// front the way the chunk path does would make a fully cached re-run pay a full decode
-    /// and a hundred megabytes of scratch to produce nothing.
+    /// front would make a fully cached re-run pay a full decode and a hundred megabytes of
+    /// scratch to produce nothing.
     private func batchAudio(
         _ batch: UploadBatch,
         manifest: SessionManifest,
@@ -701,81 +501,6 @@ public actor TranscriptionPipeline {
     /// on disk.
     static func trackFingerprint(_ info: TrackInfo) -> String {
         "frames-\(info.totalFrames)"
-    }
-
-    /// One continuous file for a track: the archive when there is one, otherwise the chunks
-    /// joined into scratch — the same both-cases logic diarization uses.
-    private func trackAudio(
-        _ track: AudioTrack,
-        manifest: SessionManifest,
-        layout: SessionLayout,
-        scratch: URL
-    ) throws -> URL {
-        let info = manifest.track(track)
-
-        if let archive = info.archive {
-            let url = layout.audioDirectory.appending(path: archive.fileName)
-            if FileManager.default.fileExists(atPath: url.path) {
-                return url
-            }
-        }
-
-        let onDisk = info.chunks.filter {
-            FileManager.default.fileExists(atPath: layout.chunkURL($0).path)
-        }
-        guard !onDisk.isEmpty else {
-            throw TranscriptionError.audioUnreadable(layout.archiveURL(track: track))
-        }
-
-        let joined = scratch.appending(path: "\(track.filePrefix).m4a")
-        try AudioArchiver.concatenate(
-            track: track,
-            chunks: onDisk,
-            layout: layout,
-            sampleRate: manifest.sampleRate,
-            to: joined
-        )
-        return joined
-    }
-
-    /// Where each chunk's audio can be read from.
-    ///
-    /// Prefers the original CAFs. Once they have been archived away, the compressed file is
-    /// split back into pieces so a re-run is still chunk-granular rather than all-or-nothing.
-    private func sources(
-        for track: AudioTrack,
-        manifest: SessionManifest,
-        layout: SessionLayout,
-        scratch: URL
-    ) throws -> [(track: AudioTrack, chunk: ChunkRef, url: URL)] {
-        let info = manifest.track(track)
-        let onDisk = info.chunks.filter {
-            FileManager.default.fileExists(atPath: layout.chunkURL($0).path)
-        }
-        if !onDisk.isEmpty {
-            return onDisk.map { (track, $0, layout.chunkURL($0)) }
-        }
-
-        guard let archive = info.archive else { return [] }
-        let url = layout.audioDirectory.appending(path: archive.fileName)
-        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
-
-        let pieces = try AudioArchiver.split(
-            archive: url,
-            track: track,
-            framesPerChunk: Int64(splitChunkSeconds * manifest.sampleRate),
-            into: scratch.appending(path: track.filePrefix)
-        )
-        return pieces.map { (track, $0.chunk, $0.url) }
-    }
-
-    /// Identifies the exact audio a cached result came from.
-    ///
-    /// Frame count plus byte size: chunks are immutable once closed, so this is enough to
-    /// notice a file that was replaced or truncated without hashing megabytes on every run.
-    static func fingerprint(of url: URL, frameCount: Int64) -> String {
-        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size]) as? Int64
-        return "\(frameCount)-\(size ?? 0)"
     }
 
     // MARK: - Archiving

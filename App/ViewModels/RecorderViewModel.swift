@@ -28,10 +28,9 @@ final class RecorderViewModel {
     ///
     /// The pre-recording form is gone, so this was quietly forcing Spanish on every recording
     /// — which does not merely mislabel an English class, it transcribes it with the wrong
-    /// model. Whisper detects the language on the first chunk and the rest of the session is
+    /// model. Whisper detects the language on the first batch and the rest of the session is
     /// pinned to what it found, so a class taught in Spanish that quotes English terminology
-    /// still does not flap. On the engine that cannot detect, settings falls back to a fixed
-    /// language rather than refusing the recording.
+    /// still does not flap.
     var language: SessionLanguage = .auto
 
     /// Whether the name was edited after capture started, so the folder still has to catch up.
@@ -153,10 +152,6 @@ final class RecorderViewModel {
             errorMessage = CaptureError.microphonePermissionDenied.localizedDescription
             return
         }
-
-        // Starts the model loading now, so the wait happens during the class rather than
-        // after it.
-        environment.pipeline?.warmUp(for: language)
 
         let coordinator = environment.coordinator
         observeEvents(of: coordinator)

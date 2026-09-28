@@ -2,8 +2,7 @@ import Foundation
 
 /// What DeepInfra's Whisper endpoint answers.
 ///
-/// Whisper reports seconds natively, so unlike AssemblyAI's milliseconds these times need no
-/// conversion. `words` is optional on purpose: the parameter that asks for word-level timings
+/// Whisper reports seconds natively, so these times need no conversion. `words` is optional on purpose: the parameter that asks for word-level timings
 /// is thinly documented, and a host that ignores it must still produce a usable transcript.
 ///
 /// Decoding is deliberately lenient. Whisper emits entries with null or absent timings around

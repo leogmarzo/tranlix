@@ -12,9 +12,8 @@ struct SessionInspector: View {
     let model: SessionViewModel
     let manifest: SessionManifest
 
-    /// Filled from the engine registry, so the re-transcribe menu offers whatever engines
-    /// exist rather than the two that existed when it was written.
-    @State private var engines: [EngineStatus] = []
+    /// Whether DeepInfra can run, so a missing key blocks the button and says where to fix it.
+    @State private var transcriber: EngineAvailability = .ready
 
     var body: some View {
         ScrollView {
@@ -89,56 +88,32 @@ struct SessionInspector: View {
                     .font(.caption)
             }
 
-            Menu("Volver a transcribir") {
-                ForEach(engines) { status in
-                    Button(label(for: status)) { model.retranscribe(with: status.id) }
-                        // Only what genuinely cannot run is blocked. A model that still has
-                        // to be downloaded is pickable — the chain downloads it — and it is
-                        // shown even when blocked, disabled and saying why: hiding it would
-                        // answer "falta la key" with "ese motor no existe".
-                        .disabled(isUnsupported(status))
-                }
+            Button("Volver a transcribir") { model.retranscribe() }
+                .controlSize(.small)
+                .disabled(model.isProcessing || !transcriber.isReady)
+                .padding(.top, 4)
+                .task { transcriber = await model.transcriberAvailability() }
+
+            // Shown rather than hidden: a disabled button with no reason reads as a bug.
+            if case let .unsupported(reason) = transcriber {
+                Text(reason)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
-            .menuStyle(.button)
-            .controlSize(.small)
-            .disabled(model.isProcessing || engines.isEmpty)
-            .padding(.top, 4)
-            .task { engines = await model.engineStatuses() }
-
-            Text("Los resultados de cada motor se guardan por separado, así que probar el otro no descarta el trabajo del primero.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
         }
     }
 
-    /// Whether this engine cannot run at all, which is the only thing that blocks a choice.
-    private func isUnsupported(_ status: EngineStatus) -> Bool {
-        if case .unsupported = status.availability { return true }
-        return false
-    }
-
-    /// What one engine is called in the menu, and why it cannot be picked when it cannot.
-    private func label(for status: EngineStatus) -> String {
-        switch status.availability {
-        case .ready:
-            "Con \(status.displayName)"
-        case .needsDownload:
-            // Pickable: the chain downloads it. Saying so up front is the difference between
-            // a wait somebody expects and one that looks like a hang.
-            "Con \(status.displayName) — descarga el modelo primero"
-        case .unsupported:
-            // Whisper's reason names a language, AssemblyAI's names the key. Both are
-            // already written once, in the engine; this only says where to go.
-            "Con \(status.displayName) — configuralo en Ajustes"
-        }
-    }
-
+    /// Which engine produced the transcript on disk.
+    ///
+    /// The retired engines are still named, because sessions they transcribed are still in
+    /// the library and their manifests still say so. Matched on the stored strings, since
+    /// the constants for those engines no longer exist.
     private var engineName: String {
         switch manifest.transcriptionEngine {
-        case EngineID.whisperKit.rawValue: "Whisper"
-        case EngineID.apple.rawValue: "Apple Speech"
-        case EngineID.assemblyAI.rawValue: "AssemblyAI"
         case EngineID.deepInfra.rawValue: "DeepInfra"
+        case "whisperkit": "Whisper (local, retirado)"
+        case "apple": "Apple Speech (retirado)"
+        case "assemblyai": "AssemblyAI (retirado)"
         case let other?: other
         case nil: "—"
         }

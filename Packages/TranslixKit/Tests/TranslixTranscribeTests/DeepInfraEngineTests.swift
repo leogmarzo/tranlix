@@ -171,16 +171,12 @@ struct DeepInfraEngineTests {
 
     @Test("this engine brings no speakers, so the local diarizer must still run")
     func doesNotSeparateSpeakers() async throws {
-        // The flag the planner reads. Getting it wrong would skip diarization and leave every
-        // line of a meeting unattributed.
         let sut = engine { _ in (200, Self.success) }
-
-        #expect(sut.separatesSpeakers == false)
 
         let result = try await sut.transcribe(
             trackFile: try audioFile(), track: .system, language: .fixed("es")
         ) { _ in }
-        #expect(result.turns.isEmpty)
+        #expect(result.segments.allSatisfy { $0.speakerID == nil })
     }
 
     @Test("automatic reports the language Whisper detected, a fixed one reports nothing")
@@ -195,8 +191,8 @@ struct DeepInfraEngineTests {
         let fixed = try await sut.transcribe(
             trackFile: try audioFile(), track: .mic, language: .fixed("es-CL")
         ) { _ in }
-        // Echoing back an instruction as a discovery is the bug EngineTranscription exists
-        // to prevent.
+        // Echoing back an instruction as a discovery would pin a session to a language
+        // nobody detected.
         #expect(fixed.detectedLanguage == nil)
     }
 
@@ -397,20 +393,6 @@ struct DeepInfraEngineTests {
                 trackFile: try self.audioFile(), track: .mic, language: .fixed("es")
             ) { _ in }
         }
-    }
-
-    // MARK: - Registry
-
-    @Test("the registry offers DeepInfra and reports it takes no disk")
-    func registryOffersDeepInfra() async {
-        let registry = TranscriptionEngineRegistry(deepInfraKey: { "di-test-key" })
-
-        #expect(registry.availableEngineIDs.contains(.deepInfra))
-
-        let status = await registry.status(for: .deepInfra, language: .automatic)
-        #expect(status.availability == .ready)
-        #expect(status.installedBytes == nil)
-        #expect(!status.canRemove)
     }
 
     @Test("engine ids stay stable, because results are filed under them")

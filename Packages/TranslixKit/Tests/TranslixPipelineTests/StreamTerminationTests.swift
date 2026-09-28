@@ -32,7 +32,6 @@ struct StreamTerminationTests {
         )
         let request = PipelineRequest(
             language: .fixed("es-CL"),
-            engineID: EngineID(rawValue: "stub"),
             notes: NotesRequest(
                 templates: [.general: NotesTemplate(instruction: "Resumí", title: "Nota")],
                 model: "m", allowance: .confirmedByUser()

@@ -71,9 +71,8 @@ public struct SessionLayout: Sendable, Equatable {
 
     /// Where one chunk's transcription result lives.
     ///
-    /// Keyed by engine, so transcribing the same session with both engines produces two
-    /// independent trees and neither invalidates the other. That is what makes the two
-    /// engines comparable on identical audio instead of only in the abstract.
+    /// Keyed by engine, so results a retired engine left behind stay in their own tree and are
+    /// never read back as the current engine's.
     public func chunkTranscriptURL(
         engineID: String,
         track: AudioTrack,

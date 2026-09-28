@@ -76,7 +76,7 @@ public enum RemoteRetry {
 
     /// Turns whatever `URLSession` threw into a classified failure — or into cancellation.
     ///
-    /// The cancellation half is load-bearing and was previously missing from both engines.
+    /// The cancellation half is load-bearing and was previously missing from the engine.
     /// `URLSession.data(for:)` reports a cancelled surrounding task as `URLError(.cancelled)`,
     /// not `CancellationError`, so a `catch is CancellationError` never fired and cancelling a
     /// run marked the session **failed** instead of putting it back the way it was.

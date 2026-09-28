@@ -2,7 +2,6 @@ import Foundation
 import Observation
 import TranslixModel
 import TranslixSummarize
-import TranslixTranscribe
 
 /// User preferences, kept in `UserDefaults`.
 ///
@@ -11,13 +10,6 @@ import TranslixTranscribe
 @MainActor
 @Observable
 final class SettingsStore {
-    var transcription: TranscriptionSettings {
-        didSet {
-            guard transcription != oldValue else { return }
-            persist()
-        }
-    }
-
     /// Which Claude model writes the notes. Only the choice is stored here — the API key
     /// lives in the keychain, never in `UserDefaults`.
     var summaryModel: SummaryModel {
@@ -76,7 +68,6 @@ final class SettingsStore {
         recordingLimitHours.map { TimeInterval($0) * 3600 }
     }
 
-    private static let key = "transcriptionSettings"
     private static let summaryModelKey = "summaryModel"
     private static let templateIDsKey = "notesTemplateIDs"
     private static let notesLanguageKey = "notesLanguage"
@@ -86,10 +77,6 @@ final class SettingsStore {
     private static let legacyTemplateKey = "defaultTemplateID"
 
     init() {
-        let data = UserDefaults.standard.data(forKey: Self.key)
-        transcription = data
-            .flatMap { try? JSONDecoder().decode(TranscriptionSettings.self, from: $0) }
-            ?? TranscriptionSettings()
         summaryModel = UserDefaults.standard.string(forKey: Self.summaryModelKey)
             .flatMap(SummaryModel.init(rawValue:)) ?? .default
         notesLanguage = UserDefaults.standard.string(forKey: Self.notesLanguageKey)
@@ -126,15 +113,5 @@ final class SettingsStore {
         }
 
         return SessionKind.allCases.reduce(into: [:]) { $0[$1] = PromptTemplate.seededID(for: $1) }
-    }
-
-    private func persist() {
-        guard let data = try? JSONEncoder().encode(transcription) else { return }
-        UserDefaults.standard.set(data, forKey: Self.key)
-    }
-
-    /// The language to hand an engine for a session recorded in `language`.
-    func language(for language: SessionLanguage) -> TranscriptionLanguage {
-        transcription.language(for: language)
     }
 }

@@ -2,12 +2,12 @@ import AVFoundation
 import Foundation
 import TranslixModel
 
-/// Turns a track's chunks into one compressed file, and back again.
+/// Turns a track's chunks into one compressed file, and cuts ranges back out of it.
 ///
 /// Lives here rather than in capture or transcription because this is the on-disk audio
 /// lifecycle, and the store is the module that owns it. Both directions matter: chunks
-/// become an archive once transcription has succeeded, and the archive becomes chunks again
-/// when a session is re-transcribed with the other engine months later.
+/// become an archive once transcription has succeeded, and a batch is cut back out of the
+/// archive when a session is re-transcribed months later.
 public enum AudioArchiver {
     /// AAC mono at 32 kbps: about 15 MB an hour per track, which is what makes keeping every
     /// recording indefinitely a reasonable thing to do.
@@ -166,9 +166,8 @@ public enum AudioArchiver {
     /// Cuts one frame range out of an archive into an AAC file at a chosen destination.
     ///
     /// What makes a re-run of an archived session batch-granular rather than all-or-nothing,
-    /// the same promise `split` keeps for the chunk path — but producing the compressed shape
-    /// a remote engine should be sent, instead of the raw PCM `split` writes, which is eight
-    /// times the bytes and nothing anybody should be asked to upload.
+    /// and it produces the compressed shape the engine is sent rather than raw PCM, which is
+    /// eight times the bytes and nothing anybody should be asked to upload.
     ///
     /// The range is nominal, in frames of the original recording. AAC priming and padding
     /// mean the audio it yields can differ from the same range read out of the CAF chunks by
@@ -234,83 +233,5 @@ public enum AudioArchiver {
         for chunk in chunks {
             try? FileManager.default.removeItem(at: layout.chunkURL(chunk))
         }
-    }
-
-    /// Rebuilds chunk-sized pieces from an archive, in a directory of the caller's choosing.
-    ///
-    /// This is what keeps re-transcription resumable after the CAFs are gone: a session
-    /// transcribed a year ago with Apple's engine can be run through Whisper and still pick
-    /// up where it left off if that run is interrupted.
-    public static func split(
-        archive url: URL,
-        track: AudioTrack,
-        framesPerChunk: Int64,
-        into directory: URL
-    ) throws -> [(chunk: ChunkRef, url: URL)] {
-        guard let input = try? AVAudioFile(forReading: url) else {
-            throw ArchiveError.chunkUnreadable(url)
-        }
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        let format = input.processingFormat
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16384) else {
-            throw ArchiveError.encodingFailed("no se pudo reservar el buffer de lectura")
-        }
-
-        var pieces: [(chunk: ChunkRef, url: URL)] = []
-        var index = 0
-        var startFrame: Int64 = 0
-
-        while input.framePosition < input.length {
-            let fileName = ChunkRef.fileName(track: track, index: index)
-            let pieceURL = directory.appending(path: fileName)
-            try? FileManager.default.removeItem(at: pieceURL)
-
-            let output = try AVAudioFile(
-                forWriting: pieceURL,
-                settings: [
-                    AVFormatIDKey: kAudioFormatLinearPCM,
-                    AVSampleRateKey: format.sampleRate,
-                    AVNumberOfChannelsKey: 1,
-                    AVLinearPCMBitDepthKey: 16,
-                    AVLinearPCMIsFloatKey: false,
-                    AVLinearPCMIsBigEndianKey: false,
-                    AVLinearPCMIsNonInterleaved: false,
-                ],
-                commonFormat: .pcmFormatFloat32,
-                interleaved: false
-            )
-
-            var written: Int64 = 0
-            while written < framesPerChunk, input.framePosition < input.length {
-                let wanted = min(
-                    AVAudioFrameCount(framesPerChunk - written),
-                    buffer.frameCapacity
-                )
-                try input.read(into: buffer, frameCount: wanted)
-                guard buffer.frameLength > 0 else { break }
-                try output.write(from: buffer)
-                written += Int64(buffer.frameLength)
-            }
-
-            guard written > 0 else {
-                try? FileManager.default.removeItem(at: pieceURL)
-                break
-            }
-
-            pieces.append((
-                ChunkRef(
-                    index: index,
-                    fileName: fileName,
-                    startFrame: startFrame,
-                    frameCount: written
-                ),
-                pieceURL
-            ))
-            startFrame += written
-            index += 1
-        }
-
-        return pieces
     }
 }
