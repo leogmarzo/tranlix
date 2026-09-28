@@ -1,6 +1,6 @@
 import SwiftUI
-import TranslixExport
-import TranslixModel
+import TranlixExport
+import TranlixModel
 
 /// The notes, read here.
 ///
@@ -91,7 +91,7 @@ struct NotesPane: View {
         )) ?? AttributedString(markdown)
     }
 
-    static let seekScheme = "translix-seek"
+    static let seekScheme = "tranlix-seek"
 
     private var earlier: some View {
         VStack(alignment: .leading, spacing: 6) {

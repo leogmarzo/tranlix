@@ -18,16 +18,16 @@
 - AssemblyAI times are milliseconds; the app's are seconds (`TimeInterval`).
 - Speaker ids: `SessionManifest.micSpeakerID` (`"mic"`) and `SessionManifest.systemSpeakerID(n)` (`"system-n"`, numbered by first speech).
 - On-disk contract is additive only: new manifest field decodes with `decodeIfPresent`; `EngineID` raw value `"assemblyai"` is forever.
-- Tests never touch the network; run with `scripts/test.sh` (or `swift test --package-path Packages/TranslixKit`).
+- Tests never touch the network; run with `scripts/test.sh` (or `swift test --package-path Packages/TranlixKit`).
 
 ---
 
 ### Task 1: DTOs and mapper (the pure core)
 
 **Files:**
-- Create: `Packages/TranslixKit/Sources/TranslixTranscribe/AssemblyAI/AssemblyAIModels.swift`
-- Create: `Packages/TranslixKit/Sources/TranslixTranscribe/AssemblyAI/AssemblyAIMapper.swift`
-- Test: `Packages/TranslixKit/Tests/TranslixTranscribeTests/AssemblyAIMapperTests.swift`
+- Create: `Packages/TranlixKit/Sources/TranlixTranscribe/AssemblyAI/AssemblyAIModels.swift`
+- Create: `Packages/TranlixKit/Sources/TranlixTranscribe/AssemblyAI/AssemblyAIMapper.swift`
+- Test: `Packages/TranlixKit/Tests/TranlixTranscribeTests/AssemblyAIMapperTests.swift`
 
 **Interfaces:**
 - Produces `AssemblyAITranscript: Decodable, Sendable` mirroring the poll response: `id: String`, `status: Status` (`queued|processing|completed|error`), `error: String?`, `languageCode: String?`, `words: [Word]?`, `utterances: [Utterance]?` where `Word = {text: String, start: Int, end: Int, confidence: Double?, speaker: String?}` and `Utterance = {speaker: String, start: Int, end: Int, text: String, confidence: Double?, words: [Word]}` (snake_case decoding via explicit CodingKeys; times in ms).
@@ -37,7 +37,7 @@
   - `static let segmentGap: TimeInterval = 1.2`, `static let segmentCap: TimeInterval = 30`
 
 - [x] Write failing tests: system utterances map (ms→s, renumbering A/B→system-1/2 by first speech, words attached, turns produced); mic words gap-split at ≥1.2 s and at 30 s runs, all `mic`, no turns; system without utterances falls back to single `system-1`; empty/nil words produce empty result.
-- [x] Run `swift test --package-path Packages/TranslixKit --filter AssemblyAIMapperTests` — expect compile failure/red.
+- [x] Run `swift test --package-path Packages/TranlixKit --filter AssemblyAIMapperTests` — expect compile failure/red.
 - [x] Implement DTOs + mapper.
 - [x] Tests green.
 - [x] Commit: `map assemblyai responses onto the app's transcript shapes`
@@ -45,8 +45,8 @@
 ### Task 2: HTTP client
 
 **Files:**
-- Create: `Packages/TranslixKit/Sources/TranslixTranscribe/AssemblyAI/AssemblyAIClient.swift`
-- Test: `Packages/TranslixKit/Tests/TranslixTranscribeTests/AssemblyAIClientTests.swift`
+- Create: `Packages/TranlixKit/Sources/TranlixTranscribe/AssemblyAI/AssemblyAIClient.swift`
+- Test: `Packages/TranlixKit/Tests/TranlixTranscribeTests/AssemblyAIClientTests.swift`
 
 **Interfaces:**
 - Produces `actor AssemblyAIClient`:
@@ -64,10 +64,10 @@
 ### Task 3: Engine, protocol, registry
 
 **Files:**
-- Modify: `Packages/TranslixKit/Sources/TranslixTranscribe/TranscriptionEngine.swift` (add `EngineID.assemblyAI`; add `TrackTranscribing` protocol + `TrackTranscription` + `TrackTranscriptionPhase`)
-- Create: `Packages/TranslixKit/Sources/TranslixTranscribe/AssemblyAI/AssemblyAIEngine.swift`
-- Modify: `Packages/TranslixKit/Sources/TranslixTranscribe/TranscriptionSettings.swift` (registry: id list, construction with key closure, status row)
-- Test: `Packages/TranslixKit/Tests/TranslixTranscribeTests/AssemblyAIEngineTests.swift`
+- Modify: `Packages/TranlixKit/Sources/TranlixTranscribe/TranscriptionEngine.swift` (add `EngineID.assemblyAI`; add `TrackTranscribing` protocol + `TrackTranscription` + `TrackTranscriptionPhase`)
+- Create: `Packages/TranlixKit/Sources/TranlixTranscribe/AssemblyAI/AssemblyAIEngine.swift`
+- Modify: `Packages/TranlixKit/Sources/TranlixTranscribe/TranscriptionSettings.swift` (registry: id list, construction with key closure, status row)
+- Test: `Packages/TranlixKit/Tests/TranlixTranscribeTests/AssemblyAIEngineTests.swift`
 
 **Interfaces:**
 - `EngineID.assemblyAI` = `"assemblyai"`.
@@ -88,10 +88,10 @@
 ### Task 4: Model and planner groundwork
 
 **Files:**
-- Modify: `Packages/TranslixKit/Sources/TranslixModel/SessionManifest.swift` (`audioSharedAt: Date?`, decodeIfPresent, init param default nil)
-- Modify: `Packages/TranslixKit/Sources/TranslixStore/SessionHandle.swift` (`recordAudioShared(at:)` write-once like `recordTranscriptShared`)
-- Modify: `Packages/TranslixKit/Sources/TranslixPipeline/ChainPlanner.swift` (`SkipReason.coveredByTranscription`; `plan(..., engineSeparatesSpeakers: Bool = false)`)
-- Tests: `Packages/TranslixKit/Tests/TranslixModelTests/SessionManifestTests.swift`, `Packages/TranslixKit/Tests/TranslixPipelineTests/ChainPlannerTests.swift`
+- Modify: `Packages/TranlixKit/Sources/TranlixModel/SessionManifest.swift` (`audioSharedAt: Date?`, decodeIfPresent, init param default nil)
+- Modify: `Packages/TranlixKit/Sources/TranlixStore/SessionHandle.swift` (`recordAudioShared(at:)` write-once like `recordTranscriptShared`)
+- Modify: `Packages/TranlixKit/Sources/TranlixPipeline/ChainPlanner.swift` (`SkipReason.coveredByTranscription`; `plan(..., engineSeparatesSpeakers: Bool = false)`)
+- Tests: `Packages/TranlixKit/Tests/TranlixModelTests/SessionManifestTests.swift`, `Packages/TranlixKit/Tests/TranlixPipelineTests/ChainPlannerTests.swift`
 
 **Interfaces:**
 - Produces `manifest.audioSharedAt: Date?`, `SessionHandle.recordAudioShared(at: Date) throws` (idempotent), `SkipReason.coveredByTranscription`, planner param `engineSeparatesSpeakers`.
@@ -103,10 +103,10 @@
 ### Task 5: Remote branch in TranscriptionPipeline
 
 **Files:**
-- Modify: `Packages/TranslixKit/Sources/TranslixTranscribe/TranscriptionPipeline.swift`
-- Modify: `Packages/TranslixKit/Sources/TranslixTranscribe/TranscriptionEngine.swift` only if a helper is needed (avoid)
-- Test: `Packages/TranslixKit/Tests/TranslixTranscribeTests/RemoteTranscriptionPipelineTests.swift`
-- Modify: `Packages/TranslixKit/Sources/TranslixTestSupport/StubEngine.swift` (add `StubTrackEngine: TrackTranscribing`)
+- Modify: `Packages/TranlixKit/Sources/TranlixTranscribe/TranscriptionPipeline.swift`
+- Modify: `Packages/TranlixKit/Sources/TranlixTranscribe/TranscriptionEngine.swift` only if a helper is needed (avoid)
+- Test: `Packages/TranlixKit/Tests/TranlixTranscribeTests/RemoteTranscriptionPipelineTests.swift`
+- Modify: `Packages/TranlixKit/Sources/TranlixTestSupport/StubEngine.swift` (add `StubTrackEngine: TrackTranscribing`)
 
 **Interfaces:**
 - `TranscriptionPhase` gains `.preparingUpload`, `.uploading(track: AudioTrack, fraction: Double)`, `.waitingRemote`; fractions: preparingUpload 0.05, uploading 0.1 + 0.5·overall, waitingRemote 0.9 held below archiving's 0.95 (uploading overall = (finishedTracks + trackFraction)/trackCount).
@@ -120,9 +120,9 @@
 ### Task 6: SessionPipeline + PipelinePhase wiring
 
 **Files:**
-- Modify: `Packages/TranslixKit/Sources/TranslixPipeline/SessionPipeline.swift` (pass `engineSeparatesSpeakers: engine is TrackTranscribing` to the planner)
-- Modify: `Packages/TranslixKit/Sources/TranslixPipeline/PipelinePhase.swift` (details + no fraction regressions for new cases)
-- Tests: `Packages/TranslixKit/Tests/TranslixPipelineTests/SessionPipelineTests.swift`, `PipelinePhaseTests.swift`
+- Modify: `Packages/TranlixKit/Sources/TranlixPipeline/SessionPipeline.swift` (pass `engineSeparatesSpeakers: engine is TrackTranscribing` to the planner)
+- Modify: `Packages/TranlixKit/Sources/TranlixPipeline/PipelinePhase.swift` (details + no fraction regressions for new cases)
+- Tests: `Packages/TranlixKit/Tests/TranlixPipelineTests/SessionPipelineTests.swift`, `PipelinePhaseTests.swift`
 
 **Interfaces:**
 - Details: `.preparingUpload` → "Preparando el audio para subir…"; `.uploading(track, f)` → "Subiendo \(track.spokenName)… NN %"; `.waitingRemote` → "Transcribiendo en el servidor. Podés cerrar la tapa: la app retoma sola."
@@ -133,11 +133,11 @@
 ### Task 7: App layer and docs
 
 **Files:**
-- Modify: `App/AppEnvironment.swift` (registry with `assemblyAIKey: { try? APIKeyStore(service: AssemblyAIEngine.keychainService).read() }`, `import TranslixSummarize`)
+- Modify: `App/AppEnvironment.swift` (registry with `assemblyAIKey: { try? APIKeyStore(service: AssemblyAIEngine.keychainService).read() }`, `import TranlixSummarize`)
 - Modify: `App/Views/SettingsView.swift` (AssemblyAI section: SecureField/hint/delete mirroring `NotesSettingsPane`; engine-aware ready note "Transcribe y separa voces en el servidor. No ocupa disco."; caption with cost ~US$ 0.32/h and the privacy line; refresh statuses after key changes)
 - Modify: `App/Views/Session/SessionInspector.swift` (case `EngineID.assemblyAI.rawValue: "AssemblyAI"`)
 - Modify: `README.md` (recording pipeline description: local engines or AssemblyAI in the cloud; permissions/privacy paragraph)
-- Modify: `Packages/TranslixKit/Sources/TranslixSummarize/AnthropicProvider.swift` (stale "the one place anything leaves the machine" comment)
+- Modify: `Packages/TranlixKit/Sources/TranlixSummarize/AnthropicProvider.swift` (stale "the one place anything leaves the machine" comment)
 
 - [x] Implement; `scripts/build.sh` compiles; manual smoke not required for commit.
 - [x] Commit: `let settings hold an assemblyai key and offer the cloud engine`

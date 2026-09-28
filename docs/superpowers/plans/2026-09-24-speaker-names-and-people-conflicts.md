@@ -69,24 +69,24 @@
 
 **Files**
 
-- Modify `Packages/TranslixKit/Sources/TranslixExport/TranscriptRenderer.swift`.
-- Modify `Packages/TranslixKit/Sources/TranslixModel/VoiceProfile.swift` for the shared candidate type.
-- Create `Packages/TranslixKit/Sources/TranslixSummarize/SummaryMetadata.swift`.
-- Modify `Packages/TranslixKit/Sources/TranslixSummarize/SummaryPipeline.swift` and `Packages/TranslixKit/Sources/TranslixPipeline/SessionPipeline.swift`.
-- Extend `Packages/TranslixKit/Tests/TranslixExportTests/TranscriptRendererTests.swift` and `Packages/TranslixKit/Tests/TranslixSummarizeTests/AutomaticTitleTests.swift`.
-- Create `Packages/TranslixKit/Tests/TranslixSummarizeTests/SummaryMetadataTests.swift`.
+- Modify `Packages/TranlixKit/Sources/TranlixExport/TranscriptRenderer.swift`.
+- Modify `Packages/TranlixKit/Sources/TranlixModel/VoiceProfile.swift` for the shared candidate type.
+- Create `Packages/TranlixKit/Sources/TranlixSummarize/SummaryMetadata.swift`.
+- Modify `Packages/TranlixKit/Sources/TranlixSummarize/SummaryPipeline.swift` and `Packages/TranlixKit/Sources/TranlixPipeline/SessionPipeline.swift`.
+- Extend `Packages/TranlixKit/Tests/TranlixExportTests/TranscriptRendererTests.swift` and `Packages/TranlixKit/Tests/TranlixSummarizeTests/AutomaticTitleTests.swift`.
+- Create `Packages/TranlixKit/Tests/TranlixSummarizeTests/SummaryMetadataTests.swift`.
 
 **Contract**
 
 - Add `includeSpeakerIDs: Bool = false` to renderer options; enable it for `.prompt` only. Group consecutive speech by speaker identity, not display name, including in normal exports. Preserve the existing public Block shape if possible by retaining a private grouping key.
-- Introduce `SpeakerNameCandidate(speakerID: String, name: String, evidence: String)` in TranslixModel for use by both summary and store code.
+- Introduce `SpeakerNameCandidate(speakerID: String, name: String, evidence: String)` in TranlixModel for use by both summary and store code.
 - Introduce a summary response parser returning an optional title, `[SpeakerNameCandidate]`, and the Markdown body. Keep `SummaryProvider.summarize` returning String so existing providers and stubs remain compatible.
 - Use a bounded metadata header before the Markdown, with a fixed body delimiter. Parse JSON only inside that header. Accept plain Markdown and the current `<session-title>` response format for compatibility.
 - The response contract should have this shape when name extraction is enabled:
 
 ```text
-<translix-metadata>{"sessionTitle":null,"speakerNames":[{"speakerID":"system-1","name":"Alex Rivera","evidence":"I'm Alex Rivera."}]}</translix-metadata>
-<!-- translix-notes -->
+<tranlix-metadata>{"sessionTitle":null,"speakerNames":[{"speakerID":"system-1","name":"Alex Rivera","evidence":"I'm Alex Rivera."}]}</tranlix-metadata>
+<!-- tranlix-notes -->
 ## Decisions
 The team will publish the draft tomorrow.
 ```
@@ -105,13 +105,13 @@ The team will publish the draft tomorrow.
 
 **Files**
 
-- Modify `Packages/TranslixKit/Sources/TranslixModel/VoiceProfile.swift` for provenance fields.
-- Modify `Packages/TranslixKit/Sources/TranslixStore/SessionHandle.swift`.
-- Modify `Packages/TranslixKit/Sources/TranslixSummarize/SummaryPipeline.swift` and `Packages/TranslixKit/Sources/TranslixPipeline/SessionPipeline.swift`.
-- Modify `Packages/TranslixKit/Sources/TranslixPipeline/PipelinePhase.swift` and `App/ViewModels/PipelineCoordinator.swift` to carry nonblocking name-save warnings through the running pipeline to the session UI.
-- Modify `Packages/TranslixKit/Sources/TranslixTranscribe/TranscriptionPipeline.swift` and `Packages/TranslixKit/Sources/TranslixDiarize/DiarizationPipeline.swift` at successful transcript replacement points.
+- Modify `Packages/TranlixKit/Sources/TranlixModel/VoiceProfile.swift` for provenance fields.
+- Modify `Packages/TranlixKit/Sources/TranlixStore/SessionHandle.swift`.
+- Modify `Packages/TranlixKit/Sources/TranlixSummarize/SummaryPipeline.swift` and `Packages/TranlixKit/Sources/TranlixPipeline/SessionPipeline.swift`.
+- Modify `Packages/TranlixKit/Sources/TranlixPipeline/PipelinePhase.swift` and `App/ViewModels/PipelineCoordinator.swift` to carry nonblocking name-save warnings through the running pipeline to the session UI.
+- Modify `Packages/TranlixKit/Sources/TranlixTranscribe/TranscriptionPipeline.swift` and `Packages/TranlixKit/Sources/TranlixDiarize/DiarizationPipeline.swift` at successful transcript replacement points.
 - Modify `App/Views/Session/SessionInspector.swift` and `App/ViewModels/SessionViewModel.swift`.
-- Create `Packages/TranslixKit/Tests/TranslixStoreTests/InferredSpeakerNameTests.swift` and `Packages/TranslixKit/Tests/TranslixSummarizeTests/SpeakerNamingTests.swift`; extend `Packages/TranslixKit/Tests/TranslixPipelineTests/VoicePipelineTests.swift`.
+- Create `Packages/TranlixKit/Tests/TranlixStoreTests/InferredSpeakerNameTests.swift` and `Packages/TranlixKit/Tests/TranlixSummarizeTests/SpeakerNamingTests.swift`; extend `Packages/TranlixKit/Tests/TranlixPipelineTests/VoicePipelineTests.swift`.
 
 **Contract**
 
@@ -136,9 +136,9 @@ The team will publish the draft tomorrow.
 
 **Files**
 
-- Create `Packages/TranslixKit/Sources/TranslixModel/PeopleNameConflict.swift`.
-- Modify `Packages/TranslixKit/Sources/TranslixModel/VoiceProfile.swift`, `Packages/TranslixKit/Sources/TranslixStore/VoiceProfileStore.swift`, and `Packages/TranslixKit/Sources/TranslixDiarize/VoiceRecognitionService.swift`.
-- Create `Packages/TranslixKit/Tests/TranslixModelTests/PeopleNameConflictTests.swift` and `Packages/TranslixKit/Tests/TranslixStoreTests/VoiceProfileConflictTests.swift`.
+- Create `Packages/TranlixKit/Sources/TranlixModel/PeopleNameConflict.swift`.
+- Modify `Packages/TranlixKit/Sources/TranlixModel/VoiceProfile.swift`, `Packages/TranlixKit/Sources/TranlixStore/VoiceProfileStore.swift`, and `Packages/TranlixKit/Sources/TranlixDiarize/VoiceRecognitionService.swift`.
+- Create `Packages/TranlixKit/Tests/TranlixModelTests/PeopleNameConflictTests.swift` and `Packages/TranlixKit/Tests/TranlixStoreTests/VoiceProfileConflictTests.swift`.
 
 **Contract**
 
@@ -186,7 +186,7 @@ The team will publish the draft tomorrow.
 - [ ] Verify two saved profiles with the same name remain distinct through recognition, notification, and renaming. Check that recording names and old notes remain unchanged by profile rename.
 - [ ] Update `README.md` to describe name inference, its provenance, explicit remembering, and conflict notifications.
 - [ ] Run the full unit suite with `./scripts/test.sh`.
-- [ ] Regenerate the project for new App files with `xcodegen generate`, then build with `xcodebuild -project Translix.xcodeproj -scheme Translix -configuration Debug -destination 'platform=macOS' build`. Inspect generated-project changes and retain only those required by this feature.
+- [ ] Regenerate the project for new App files with `xcodegen generate`, then build with `xcodebuild -project Tranlix.xcodeproj -scheme Tranlix -configuration Debug -destination 'platform=macOS' build`. Inspect generated-project changes and retain only those required by this feature.
 - [ ] Run one manual end-to-end session using a synthetic or user-approved recording with self-introductions. Check transcript labels, inspector, persisted names after reopening, explicit enrollment, duplicate badge, and navigation to the affected rows. Report separately whether real model behavior was exercised; stub tests cannot establish inference accuracy.
 - [ ] Review the diff against the initial dirty-worktree baseline. Do not include unrelated changes in future commits; commit messages must be imperative and omit attribution trailers.
 
@@ -213,11 +213,11 @@ Notes generation will supply editable default names for previously unnamed recor
 
 | Cohort / File(s) | Summary |
 |---|---|
-| **Speaker-aware notes**<br>`TranslixExport/TranscriptRenderer.swift`, `TranslixSummarize/{SummaryMetadata,SummaryPipeline}.swift`, `TranslixPipeline/SessionPipeline.swift` | Preserve distinct speaker identities and extract names in the existing notes request. |
-| **Name persistence and precedence**<br>`TranslixModel/VoiceProfile.swift`, `TranslixStore/SessionHandle.swift`, transcription/diarization pipelines, session inspector | Apply only eligible names, retain provenance, invalidate stale inference, and protect manual and saved-person assignments. |
-| **People conflicts and context**<br>`TranslixModel/PeopleNameConflict.swift`, `TranslixStore/VoiceProfileStore.swift`, `TranslixDiarize/VoiceRecognitionService.swift` | Detect duplicate profile names without merging identities; retain optional enrollment origins. |
+| **Speaker-aware notes**<br>`TranlixExport/TranscriptRenderer.swift`, `TranlixSummarize/{SummaryMetadata,SummaryPipeline}.swift`, `TranlixPipeline/SessionPipeline.swift` | Preserve distinct speaker identities and extract names in the existing notes request. |
+| **Name persistence and precedence**<br>`TranlixModel/VoiceProfile.swift`, `TranlixStore/SessionHandle.swift`, transcription/diarization pipelines, session inspector | Apply only eligible names, retain provenance, invalidate stale inference, and protect manual and saved-person assignments. |
+| **People conflicts and context**<br>`TranlixModel/PeopleNameConflict.swift`, `TranlixStore/VoiceProfileStore.swift`, `TranlixDiarize/VoiceRecognitionService.swift` | Detect duplicate profile names without merging identities; retain optional enrollment origins. |
 | **Notifications and navigation**<br>`App/{AppEnvironment,AppNavigation}.swift`, shared People view model and related views | Keep the bell current and open People with the affected rows highlighted. |
-| **Verification and documentation**<br>`Packages/TranslixKit/Tests/*`, `README.md`, generated Xcode project | Cover attribution, precedence, conflict lifecycle, compatibility, and the complete user flow. |
+| **Verification and documentation**<br>`Packages/TranlixKit/Tests/*`, `README.md`, generated Xcode project | Cover attribution, precedence, conflict lifecycle, compatibility, and the complete user flow. |
 
 ### Resulting flow
 

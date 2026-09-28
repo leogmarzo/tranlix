@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import TranslixStore
+import TranlixStore
 
 struct RootView: View {
     let environment: AppEnvironment

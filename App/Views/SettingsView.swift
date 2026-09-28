@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
-import TranslixDiarize
-import TranslixStore
-import TranslixSummarize
-import TranslixTranscribe
+import TranlixDiarize
+import TranlixStore
+import TranlixSummarize
+import TranlixTranscribe
 
 struct SettingsView: View {
     @Bindable var environment: AppEnvironment
@@ -65,6 +65,11 @@ private struct GeneralSettings: View {
                     Text("Nunca").tag(Int?.none)
                 }
                 Text("Cuenta el tiempo grabado, sin las pausas. Al llegar al límite la grabación termina y no se procesa: si la querés, la transcribís desde la sesión. El cambio vale desde la próxima grabación.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Mostrar control flotante mientras grabás", isOn: $settings.showFloatingRecorder)
+                Text("Un control chico que queda sobre las demás apps con el tiempo, el nivel del micrófono y Pausar. Se arrastra desde los puntos y se pega al borde más cercano de la pantalla.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

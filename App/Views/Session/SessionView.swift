@@ -1,7 +1,7 @@
 import SwiftUI
-import TranslixModel
-import TranslixPipeline
-import TranslixStore
+import TranlixModel
+import TranlixPipeline
+import TranlixStore
 
 /// A finished session, as a document you can read and listen to.
 ///

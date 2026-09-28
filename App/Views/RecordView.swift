@@ -1,6 +1,6 @@
 import AppKit
 import SwiftUI
-import TranslixModel
+import TranlixModel
 
 /// The live session: what is being captured, and what you want to remember about it.
 ///

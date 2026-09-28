@@ -1,5 +1,5 @@
 import SwiftUI
-import TranslixModel
+import TranlixModel
 
 /// The session's shape, with the playhead and everything worth jumping to on it.
 ///
