@@ -59,9 +59,9 @@ struct DeepInfraEngineTests {
       "text": "hola a todos",
       "segments": [{"start": 0.0, "end": 2.0, "text": "hola a todos"}],
       "words": [
-        {"start": 0.0, "end": 0.4, "text": "hola"},
-        {"start": 0.5, "end": 0.7, "text": "a"},
-        {"start": 0.8, "end": 2.0, "text": "todos"}
+        {"word": " hola", "start": 0.0, "end": 0.4},
+        {"word": " a", "start": 0.5, "end": 0.7},
+        {"word": " todos", "start": 0.8, "end": 2.0}
       ],
       "language": "es"
     }

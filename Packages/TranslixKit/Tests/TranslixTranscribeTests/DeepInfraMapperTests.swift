@@ -184,6 +184,60 @@ struct DeepInfraMapperTests {
         #expect(decoded.segments.first?.end == 2.0)
     }
 
+    @Test("words decode from DeepInfra's real `word` key and attach to their segments")
+    func realWordShapeDecodesAndAttaches() throws {
+        // The shape a raw probe of openai/whisper-large-v3 and Qwen/Qwen3-ASR-1.7B returned
+        // with `chunk_level=word` on 2026-09-28: words carry `word`, not `text`, with a leading
+        // space. Reading only `text` dropped every one of them, so the diarizer could never
+        // cut a segment mid-sentence. The last word is Qwen's zero-length kind.
+        let json = Data("""
+        {
+          "text": " Okay. Let's start. Good.",
+          "segments": [
+            {"id": 0, "start": 0.0, "end": 1.2, "text": " Okay. Let's start."},
+            {"id": 1, "start": 2.0, "end": 2.5, "text": " Good."}
+          ],
+          "words": [
+            {"word": " Okay.", "start": 0.0, "end": 0.30000001192092896},
+            {"word": " Let's", "start": 0.4, "end": 0.7},
+            {"word": " start.", "start": 0.7, "end": 1.2},
+            {"word": " Good.", "start": 2.2, "end": 2.2}
+          ],
+          "language": "en"
+        }
+        """.utf8)
+
+        let decoded = try JSONDecoder().decode(DeepInfraTranscription.self, from: json)
+
+        #expect(decoded.words?.map(\.text) == [" Okay.", " Let's", " start.", " Good."])
+        #expect(decoded.segments.map(\.text) == [" Okay. Let's start.", " Good."])
+
+        let result = DeepInfraMapper.segments(for: decoded, track: .system)
+
+        #expect(result.map(\.text) == ["Okay. Let's start.", "Good."])
+        #expect(result[0].words.map(\.text) == ["Okay.", "Let's", "start."])
+        #expect(result[1].words.map(\.text) == ["Good."])
+        #expect(result[1].words.first?.start == 2.2)
+        #expect(result[1].words.first?.end == 2.2)
+    }
+
+    @Test("zero-length words build segments when the response has none")
+    func zeroLengthWordsGroup() {
+        // Qwen reports some words with start == end. Grouping must keep them rather than
+        // treat a zero span as nothing.
+        let result = DeepInfraMapper.segments(
+            for: response(words: [
+                DeepInfraWord(start: 0.0, end: 0.4, text: " Okay."),
+                DeepInfraWord(start: 0.5, end: 0.5, text: " Good."),
+            ]),
+            track: .system
+        )
+
+        #expect(result.map(\.text) == ["Okay. Good."])
+        #expect(result[0].words.map(\.text) == ["Okay.", "Good."])
+        #expect(result[0].end == 0.5)
+    }
+
     @Test("a null timestamp does not cost the whole transcript")
     func nullTimestampsDecode() throws {
         // Whisper emits entries with null timings at boundaries and around non-speech. Making
