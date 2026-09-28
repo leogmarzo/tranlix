@@ -113,8 +113,8 @@ struct SpeakerNamingTests {
 
 private struct ActingNamingProvider: SummaryProvider {
     let action: @Sendable () async throws -> Void
-    func summarize(_ request: SummaryRequest) async throws -> String {
+    func summarize(_ request: SummaryRequest) async throws -> SummaryReply {
         try await action()
-        return SpeakerNamingTests.answer
+        return SummaryReply(text: SpeakerNamingTests.answer)
     }
 }

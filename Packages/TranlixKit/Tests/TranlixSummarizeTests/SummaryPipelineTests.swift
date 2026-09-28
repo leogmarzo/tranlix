@@ -74,6 +74,48 @@ struct SummaryPipelineTests {
         }
     }
 
+    // MARK: - Cut answers
+
+    @Test("a note the model could not finish is kept, and says it is incomplete")
+    func marksTruncatedNote() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try session(in: root)
+            let provider = StubProvider(answer: "## Haven app\n**Baref", truncated: true)
+
+            let note = try await SummaryPipeline(provider: provider).generate(
+                session: handle,
+                transcript: "Persona 1: hola",
+                instruction: "Resumí",
+                title: "Resumen",
+                userConfirmedSharing: true,
+                now: epoch
+            )
+
+            #expect(note.markdown.contains("**Baref"))
+            #expect(note.markdown.contains(SummaryPipeline.truncationNotice))
+            let saved = try String(contentsOf: note.url, encoding: .utf8)
+            #expect(saved.contains(SummaryPipeline.truncationNotice))
+        }
+    }
+
+    @Test("a finished note carries no warning")
+    func wholeNoteHasNoNotice() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try session(in: root)
+
+            let note = try await SummaryPipeline(provider: StubProvider()).generate(
+                session: handle,
+                transcript: "Persona 1: hola",
+                instruction: "Resumí",
+                title: "Resumen",
+                userConfirmedSharing: true,
+                now: epoch
+            )
+
+            #expect(!note.markdown.contains(SummaryPipeline.truncationNotice))
+        }
+    }
+
     @Test("a failed send still leaves the confirmation recorded")
     func recordsSharingEvenWhenTheCallFails() async throws {
         try await withTemporaryRoot { root in

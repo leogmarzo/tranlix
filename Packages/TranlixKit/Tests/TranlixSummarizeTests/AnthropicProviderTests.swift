@@ -25,7 +25,32 @@ struct AnthropicProviderTests {
     }
 
     private func success(_ text: String) -> Data {
-        Data(#"{"content":[{"type":"text","text":"\#(text)"}]}"#.utf8)
+        stream(deltas: [text])
+    }
+
+    /// A streamed answer as the Messages API sends it. `stopReason: nil` leaves out the
+    /// closing events, the way a dropped connection does.
+    private func stream(
+        deltas: [String],
+        thinking: [String] = [],
+        stopReason: String? = "end_turn"
+    ) -> Data {
+        var events = [#"{"type":"message_start","message":{"id":"msg_1","type":"message"}}"#]
+        for chunk in thinking {
+            events.append(#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"\#(chunk)"}}"#)
+        }
+        for chunk in deltas {
+            events.append(#"{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"\#(chunk)"}}"#)
+        }
+        if let stopReason {
+            events.append(#"{"type":"message_delta","delta":{"stop_reason":"\#(stopReason)"},"usage":{"output_tokens":12}}"#)
+            events.append(#"{"type":"message_stop"}"#)
+        }
+        let body = events.map { event in
+            let name = (try? JSONSerialization.jsonObject(with: Data(event.utf8)) as? [String: Any])?["type"] as? String ?? ""
+            return "event: \(name)\ndata: \(event)\n\n"
+        }.joined()
+        return Data(body.utf8)
     }
 
     // MARK: - The request
@@ -90,29 +115,87 @@ struct AnthropicProviderTests {
         #expect(json["model"] as? String == "claude-haiku-4-5-20251001")
     }
 
-    // MARK: - The response
-
-    @Test("text blocks come back joined")
-    func joinsTextBlocks() async throws {
-        let sut = provider { _ in
-            (200, Data(#"{"content":[{"type":"text","text":"uno "},{"type":"text","text":"dos"}]}"#.utf8))
+    @Test("the answer is streamed, with room for a long meeting's notes")
+    func streamsWithRoomToFinish() async throws {
+        // 8,000 cut a 90-minute meeting's notes mid-word. The ceiling is shared with the
+        // model's thinking, so it has to be well above what the note itself needs.
+        let seen = Locked<URLRequest?>(nil)
+        let sut = provider { request in
+            seen.withValue { $0 = request }
+            return (200, self.success("listo"))
         }
 
-        #expect(try await sut.summarize(request) == "uno dos")
+        _ = try await sut.summarize(request)
+
+        let body = try #require(seen.value?.httpBodyData)
+        let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(json["stream"] as? Bool == true)
+        #expect(json["max_tokens"] as? Int == 64000)
     }
 
-    @Test("non-text blocks are ignored rather than rendered")
-    func ignoresNonTextBlocks() async throws {
+    // MARK: - The response
+
+    @Test("text deltas come back joined")
+    func joinsTextDeltas() async throws {
+        let sut = provider { _ in (200, self.stream(deltas: ["uno ", "dos"])) }
+
+        #expect(try await sut.summarize(request) == SummaryReply(text: "uno dos"))
+    }
+
+    @Test("thinking is left out of the note")
+    func ignoresThinking() async throws {
         let sut = provider { _ in
-            (200, Data(#"{"content":[{"type":"thinking"},{"type":"text","text":"la nota"}]}"#.utf8))
+            (200, self.stream(deltas: ["la nota"], thinking: ["pensando"]))
         }
 
-        #expect(try await sut.summarize(request) == "la nota")
+        #expect(try await sut.summarize(request).text == "la nota")
+    }
+
+    @Test("an answer cut at the output ceiling is marked as cut")
+    func flagsTruncation() async throws {
+        let sut = provider { _ in
+            (200, self.stream(deltas: ["**Baref"], stopReason: "max_tokens"))
+        }
+
+        let reply = try await sut.summarize(request)
+        #expect(reply.isTruncated)
+        #expect(reply.text == "**Baref")
+    }
+
+    @Test("a finished answer is not marked as cut")
+    func finishedIsWhole() async throws {
+        let sut = provider { _ in (200, self.success("la nota")) }
+
+        #expect(try await sut.summarize(request).isTruncated == false)
+    }
+
+    @Test("a stream that ends without a stop reason is a failure, not a short note")
+    func droppedStreamFails() async throws {
+        let sut = provider { _ in (200, self.stream(deltas: ["media no"], stopReason: nil)) }
+
+        await #expect(throws: SummaryError.transport("la respuesta se cortó antes de terminar")) {
+            try await sut.summarize(request)
+        }
+    }
+
+    @Test("an error event after the 200 is surfaced")
+    func midStreamError() async throws {
+        let body = """
+        event: error
+        data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+
+        """
+        let sut = provider { _ in (200, Data(body.utf8)) }
+
+        await #expect(throws: SummaryError.server(status: 200, message: "Overloaded")) {
+            try await sut.summarize(request)
+        }
     }
 
     @Test("a response with no text is an error, not an empty note")
     func emptyResponseFails() async throws {
-        let sut = provider { _ in (200, Data(#"{"content":[]}"#.utf8)) }
+        let sut = provider { _ in (200, self.stream(deltas: [])) }
 
         await #expect(throws: SummaryError.emptyResponse) {
             try await sut.summarize(request)

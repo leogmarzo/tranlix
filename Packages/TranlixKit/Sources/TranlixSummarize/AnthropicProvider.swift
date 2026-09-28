@@ -20,7 +20,7 @@ public struct AnthropicProvider: SummaryProvider {
         self.session = session
     }
 
-    public func summarize(_ request: SummaryRequest) async throws -> String {
+    public func summarize(_ request: SummaryRequest) async throws -> SummaryReply {
         guard !request.transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw SummaryError.emptyTranscript
         }
@@ -35,37 +35,79 @@ public struct AnthropicProvider: SummaryProvider {
         urlRequest.setValue("application/json", forHTTPHeaderField: "content-type")
         // A two-hour transcript is a large prompt and the model thinks for a while before the
         // first byte. The default 60 seconds times out on exactly the sessions worth summarising.
+        // Streamed, this is the longest silence allowed rather than the whole answer's budget.
         urlRequest.timeoutInterval = 600
         urlRequest.httpBody = try JSONEncoder().encode(Body(request))
 
-        let data: Data
-        let response: URLResponse
         do {
-            (data, response) = try await session.data(for: urlRequest)
+            let (bytes, response) = try await session.bytes(for: urlRequest)
+
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200 ..< 300).contains(status) else {
+                // A refused request answers with plain JSON, not a stream.
+                var data = Data()
+                for try await byte in bytes { data.append(byte) }
+                switch status {
+                case 401, 403: throw SummaryError.unauthorized
+                case 429: throw SummaryError.rateLimited
+                default: throw SummaryError.server(status: status, message: Self.message(from: data))
+                }
+            }
+
+            return try await Self.reply(from: bytes.lines, status: status)
+        } catch let error as SummaryError {
+            throw error
+        } catch is CancellationError {
+            throw CancellationError()
         } catch {
             throw SummaryError.transport(error.localizedDescription)
         }
+    }
 
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200 ..< 300).contains(status) else {
-            switch status {
-            case 401, 403: throw SummaryError.unauthorized
-            case 429: throw SummaryError.rateLimited
-            default: throw SummaryError.server(status: status, message: Self.message(from: data))
+    /// Reads the server-sent events of a streamed answer.
+    ///
+    /// Streamed because notes need an output ceiling at which a blocking call can outlive any
+    /// sensible timeout. The stop reason is read for the same bug that raised the ceiling: an
+    /// answer cut at `max_tokens` looks exactly like a finished one unless someone checks.
+    static func reply<Lines: AsyncSequence>(
+        from lines: Lines, status: Int
+    ) async throws -> SummaryReply where Lines.Element == String {
+        var text = ""
+        var stopReason: String?
+
+        for try await line in lines {
+            guard line.hasPrefix("data:") else { continue }
+            let payload = Data(line.dropFirst(5).utf8)
+            guard let event = try? JSONDecoder().decode(StreamEvent.self, from: payload) else {
+                continue
+            }
+            switch event.type {
+            case "content_block_delta":
+                // Thinking arrives as its own delta type and stays out of the note.
+                if event.delta?.type == "text_delta", let chunk = event.delta?.text {
+                    text += chunk
+                }
+            case "message_delta":
+                stopReason = event.delta?.stop_reason ?? stopReason
+            case "error":
+                // Overload and the like can arrive after the 200, mid-stream.
+                throw SummaryError.server(
+                    status: status, message: event.error?.message ?? "sin detalle"
+                )
+            default:
+                break
             }
         }
 
-        guard let decoded = try? JSONDecoder().decode(Response.self, from: data) else {
-            throw SummaryError.emptyResponse
+        // No stop reason means the connection closed before the answer did. Whatever arrived
+        // is a fragment, and saving it would be the original bug by another route.
+        guard let stopReason else {
+            throw SummaryError.transport("la respuesta se cortó antes de terminar")
         }
-        let text = decoded.content
-            .filter { $0.type == "text" }
-            .compactMap(\.text)
-            .joined()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        guard !text.isEmpty else { throw SummaryError.emptyResponse }
-        return text
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw SummaryError.emptyResponse }
+        return SummaryReply(text: trimmed, isTruncated: stopReason == "max_tokens")
     }
 
     /// Pulls Anthropic's own explanation out of an error body, so the user sees what went
@@ -88,6 +130,7 @@ public struct AnthropicProvider: SummaryProvider {
     private struct Body: Encodable {
         let model: String
         let max_tokens: Int
+        let stream = true
         let system: String
         let messages: [Message]
 
@@ -119,12 +162,19 @@ public struct AnthropicProvider: SummaryProvider {
         }
     }
 
-    private struct Response: Decodable {
-        struct Content: Decodable {
-            let type: String
+    private struct StreamEvent: Decodable {
+        struct Delta: Decodable {
+            let type: String?
             let text: String?
+            let stop_reason: String?
         }
 
-        let content: [Content]
+        struct Failure: Decodable {
+            let message: String?
+        }
+
+        let type: String
+        let delta: Delta?
+        let error: Failure?
     }
 }
