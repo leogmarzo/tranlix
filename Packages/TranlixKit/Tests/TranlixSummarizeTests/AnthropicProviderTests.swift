@@ -112,7 +112,7 @@ struct AnthropicProviderTests {
 
         let body = try #require(seen.value?.httpBodyData)
         let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        #expect(json["model"] as? String == "claude-sonnet-5")
+        #expect(json["model"] as? String == "claude-sonnet-5-5")
     }
 
     @Test("the answer is streamed, with room for a long meeting's notes")
