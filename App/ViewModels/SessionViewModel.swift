@@ -54,12 +54,10 @@ final class SessionViewModel {
     var errorMessage: String?
 
     private let environment: AppEnvironment
-    private let settings: SettingsStore
 
-    init(summary: SessionSummary, environment: AppEnvironment, settings: SettingsStore) {
+    init(summary: SessionSummary, environment: AppEnvironment) {
         self.summary = summary
         self.environment = environment
-        self.settings = settings
     }
 
     // MARK: - Loading
@@ -163,20 +161,17 @@ final class SessionViewModel {
         run(stages: Set(PipelineStage.allCases))
     }
 
-    func retranscribe(with engineID: EngineID) {
-        settings.transcription.engineID = engineID
+    /// Diarization is forced along with it: the speakers already on disk belong to the old
+    /// transcript, and a session transcribed by AssemblyAI kept its speakers from there.
+    func retranscribe() {
         run(stages: [.transcription, .diarization], force: true)
     }
 
-    /// Every engine that could re-transcribe this session, and whether it can right now.
-    ///
-    /// Asked of the registry rather than listed by hand: the inspector used to name two
-    /// engines in its menu, so adding a third left it invisible exactly where a user goes to
-    /// switch engines. Unusable ones are still worth returning — a missing API key should
-    /// read as a key that is missing, not as an engine that does not exist.
-    func engineStatuses() async -> [EngineStatus] {
-        await environment.engines.statuses(
-            for: settings.language(for: manifest?.language ?? .auto)
+    /// Whether the engine can run right now. A missing key should read as a key that is
+    /// missing, next to the button that needs it.
+    func transcriberAvailability() async -> EngineAvailability {
+        await environment.transcriber.availability(
+            for: (manifest?.language ?? .auto).transcriptionLanguage
         )
     }
 

@@ -36,11 +36,9 @@ public enum PipelinePhase: Sendable, Equatable {
 
     /// One line saying what is actually happening.
     ///
-    /// The stage name alone is not enough, and the gap is not cosmetic: loading the Whisper
-    /// model and compiling it for the Neural Engine takes minutes on a cold start, during
-    /// which the stage is "transcription" and nothing is being transcribed. Five seconds of
-    /// audio sitting on "Transcribiendo" for three minutes reads as a hang, because from the
-    /// outside it is indistinguishable from one.
+    /// The stage name alone is not enough, and the gap is not cosmetic: an hour-long session
+    /// is a dozen requests, and "Transcribiendo" sitting unchanged for twenty minutes reads as
+    /// a hang, because from the outside it is indistinguishable from one.
     ///
     /// Written here rather than in the view so the wording is tested and cannot drift between
     /// the places that show progress.
@@ -58,26 +56,13 @@ public enum PipelinePhase: Sendable, Equatable {
 
     private static func transcriptionDetail(_ phase: TranscriptionPhase) -> String {
         switch phase {
-        case let .preparingEngine(fraction):
-            // Past the download the system compiles the model in its own process, reporting
-            // nothing while the app sits at zero CPU. Saying so is the difference between a
-            // wait and a crash.
-            fraction < WhisperKitEngine.downloadShare
-                ? "Descargando el modelo… \(Int(fraction / WhisperKitEngine.downloadShare * 100))%"
-                : "Compilando el modelo para el Neural Engine. Solo la primera vez, puede tardar un minuto."
-        case let .transcribing(completed, total, reused):
-            reused > 0
-                ? "Transcribiendo fragmento \(completed) de \(total) · \(reused) reutilizados"
-                : "Transcribiendo fragmento \(completed) de \(total)"
         case .preparingUpload:
             "Preparando el audio para subir…"
         case let .uploading(batch, _):
             "Subiendo \(batch.track.spokenName), bloque \(batch.index) de \(batch.total)…"
         case let .waitingRemote(batch, _):
-            // This line used to promise the lid could be closed. It was not true of
-            // either remote engine: DeepInfra's endpoint is one blocking request, and
-            // AssemblyAI never persists its job id, so a poll loop killed by sleep cannot
-            // re-attach and the next run re-uploads and re-pays. What replaces it is the
+            // This line used to promise the lid could be closed. It was not true: DeepInfra's
+            // endpoint is one blocking request, and sleep kills it. What replaces it is the
             // property the batching was built to give, and that one is true.
             "Transcribiendo el bloque \(batch.index) de \(batch.total) en el servidor. "
                 + "Si se corta, se retoma desde este bloque."

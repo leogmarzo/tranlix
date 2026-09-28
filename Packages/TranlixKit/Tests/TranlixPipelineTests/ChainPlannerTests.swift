@@ -24,7 +24,7 @@ struct ChainPlannerTests {
         // The invariant, stated as a test: there is no combination of inputs that plans the
         // notes stage without a NotesRequest, because a NotesRequest cannot be built without
         // an allowance.
-        for engine in [EngineAvailability.ready, .needsDownload(estimatedBytes: 1)] {
+        for engine in [EngineAvailability.ready, .unsupported(reason: "sin clave")] {
             for diarizer in [DiarizerAvailability.ready, .unsupported(reason: "no")] {
                 for force in [true, false] {
                     let plan = ChainPlanner.plan(
@@ -39,19 +39,17 @@ struct ChainPlannerTests {
         }
     }
 
-    @Test("an engine that cannot run this language refuses instead of half-starting")
+    @Test("an engine that cannot run refuses instead of half-starting")
     func unsupportedEngineRefuses() {
         let plan = ChainPlanner.plan(
             manifest: manifest(),
             request: request(),
-            engine: .unsupported(reason: "Apple no detecta el idioma"),
+            engine: .unsupported(reason: "Falta la clave de API de DeepInfra."),
             diarizer: .ready
         )
 
-        // Better to say so before a fifty-minute class than to fail forty minutes in. And
-        // never silently swap engines: the whole point of having two is comparing them on the
-        // same audio.
-        #expect(plan.refusal == "Apple no detecta el idioma")
+        // Better to say so before a fifty-minute class than to fail forty minutes in.
+        #expect(plan.refusal == "Falta la clave de API de DeepInfra.")
         #expect(plan.stages.isEmpty)
     }
 
@@ -71,29 +69,11 @@ struct ChainPlannerTests {
         #expect(plan.skipped.contains { $0.stage == .diarization })
     }
 
-    @Test("an engine that separates speakers makes local diarization redundant")
-    func speakerSeparatingEngineCoversDiarization() {
-        let plan = ChainPlanner.plan(
-            manifest: manifest(), request: request(), engine: .ready, diarizer: .ready,
-            engineSeparatesSpeakers: true
-        )
-
-        // The speakers arrive with the transcript; running FluidAudio afterwards would
-        // overwrite them with a second opinion nobody asked for.
-        #expect(plan.stages == [.transcription, .notes])
-        #expect(plan.skipped.contains {
-            $0.stage == .diarization && $0.reason == .coveredByTranscription
-        })
-    }
-
-    @Test("diarization asked for on its own still runs locally")
-    func diarizationAloneStillRunsLocally() {
-        // Re-separating an existing transcript is legitimate — and the remote engine only
-        // brings speakers when it transcribes, so there is nothing covering the stage here.
+    @Test("diarization asked for on its own runs without transcribing again")
+    func diarizationAlone() {
         let plan = ChainPlanner.plan(
             manifest: manifest(), request: request(stages: [.diarization]),
-            engine: .ready, diarizer: .ready,
-            engineSeparatesSpeakers: true
+            engine: .ready, diarizer: .ready
         )
 
         #expect(plan.stages == [.diarization])
@@ -131,6 +111,37 @@ struct ChainPlannerTests {
         )
         #expect(forced.stages == [.transcription, .diarization, .notes])
     }
+
+    @Test("a session transcribed by a retired engine is not re-transcribed unless asked")
+    func retiredEngineSessionsAreFinished() {
+        // Sessions from before DeepInfra was the only engine still name the engine that
+        // transcribed them. Reading that as "not done" would re-upload, and re-pay for, the
+        // recording the next time anything re-ran the chain — and then skip diarization,
+        // because speakers are on disk, leaving the new transcript without them.
+        for retired in ["whisperkit", "apple", "assemblyai"] {
+            var done = manifest()
+            done.state = .ready
+            done.transcriptionEngine = retired
+            done.diarization = DiarizationInfo(
+                diarizerID: retired == "assemblyai" ? "assemblyai" : "fluidaudio",
+                generatedAt: Date(timeIntervalSince1970: 0),
+                speakerCount: 2
+            )
+
+            let reuse = ChainPlanner.plan(
+                manifest: done, request: request(), engine: .ready, diarizer: .ready
+            )
+            #expect(reuse.stages == [.notes])
+
+            // "Volver a transcribir" forces both, so the speakers are redone for the new text.
+            let forced = ChainPlanner.plan(
+                manifest: done,
+                request: request(force: true, stages: [.transcription, .diarization]),
+                engine: .ready, diarizer: .ready
+            )
+            #expect(forced.stages == [.transcription, .diarization])
+        }
+    }
 }
 
 // MARK: - Fixtures
@@ -160,7 +171,6 @@ private func request(
 ) -> PipelineRequest {
     PipelineRequest(
         language: .fixed("es-CL"),
-        engineID: EngineID(rawValue: "stub"),
         notes: notes,
         force: force,
         stages: stages

@@ -25,10 +25,6 @@ let package = Package(
         ),
     ],
     dependencies: [
-        // Whisper large-v3-turbo running on CoreML, as a Swift package. The scope asked for
-        // whisper.cpp; this is the same model without a C build system to feed, which matters
-        // a great deal once the app has to be notarized.
-        .package(url: "https://github.com/argmaxinc/WhisperKit", from: "1.0.0"),
         // Pyannote diarization converted to CoreML. Chosen over sherpa-onnx, which is CPU-only
         // and has no Swift integration; this runs on the Neural Engine and its offline pipeline
         // is built for exactly our case, a finished file rather than a live stream.
@@ -59,14 +55,9 @@ let package = Package(
             dependencies: ["TranlixCapture", "TranlixStore", "TranlixModel", "TranlixTestSupport"]
         ),
 
-        .target(
-            name: "TranlixTranscribe",
-            dependencies: [
-                "TranlixModel",
-                "TranlixStore",
-                .product(name: "WhisperKit", package: "WhisperKit"),
-            ]
-        ),
+        // Transcription is remote-only: Whisper large-v3 on DeepInfra. No model ships with
+        // the app, which is why this target has no third-party dependency.
+        .target(name: "TranlixTranscribe", dependencies: ["TranlixModel", "TranlixStore"]),
         .testTarget(
             name: "TranlixTranscribeTests",
             dependencies: ["TranlixTranscribe", "TranlixStore", "TranlixModel", "TranlixTestSupport"]

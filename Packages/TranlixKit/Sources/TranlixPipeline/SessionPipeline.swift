@@ -25,7 +25,7 @@ public enum PipelineError: Error, LocalizedError, Equatable {
 /// tested here.
 ///
 /// Constructed per run, like the stage pipelines it drives. The expensive things — the loaded
-/// Whisper model, the diarizer — live in the actors handed in.
+/// diarizer models — live in the actors handed in.
 public actor SessionPipeline {
     private let engine: any TranscriptionEngine
     private let diarizer: any Diarizer
@@ -89,10 +89,7 @@ public actor SessionPipeline {
             manifest: handle.manifest,
             request: request,
             engine: engine.availability(for: request.language),
-            diarizer: diarizer.availability(),
-            // Only some remote engines bring the speakers with the transcript. A remote
-            // Whisper host does not, and its sessions still need the local diarizer.
-            engineSeparatesSpeakers: (engine as? any TrackTranscribing)?.separatesSpeakers ?? false
+            diarizer: diarizer.availability()
         )
 
         // Refusing is not failing. Nothing ran, so nothing about the recording changed and

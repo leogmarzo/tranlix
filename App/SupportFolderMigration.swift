@@ -2,10 +2,9 @@ import Foundation
 
 /// Moves `Application Support/Translix` to `Application Support/Tranlix`.
 ///
-/// The app was briefly called Translix, and installs from that time keep the downloaded models
-/// (over a gigabyte) and the user's edited templates under that folder. Moving it in place
-/// keeps both rather than re-fetching the models and silently falling back to the default
-/// templates.
+/// The app was briefly called Translix, and installs from that time keep the user's edited
+/// templates under that folder. Moving it in place keeps them rather than silently falling
+/// back to the default templates.
 ///
 /// Only moves when the destination does not exist yet: anything already under `Tranlix` stays
 /// as it is, and the legacy folder is left for the user to look at rather than merged or

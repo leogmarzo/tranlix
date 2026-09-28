@@ -14,14 +14,11 @@ import TranlixModel
 /// `maxUploadSeconds` exists here. On 2026-09-10 a twenty-four-minute track uploaded cleanly
 /// in under eight seconds and then drew **no response at all** for nine hundred — and because
 /// the whole track was one request, the whole session was lost with it.
-public actor DeepInfraEngine: TrackTranscribing {
+public actor DeepInfraEngine: TranscriptionEngine {
     public nonisolated let id = EngineID.deepInfra
     public nonisolated let displayName = "DeepInfra (Whisper large-v3)"
 
-    /// Whisper brings no notion of who is speaking, so the chain must still diarize locally.
-    public nonisolated let separatesSpeakers = false
-
-    /// Keychain service holding the API token. Fixed forever, like the other two.
+    /// Keychain service holding the API token. Fixed forever: changing it loses the saved key.
     public static let keychainService = "com.leomarzo.tranlix.deepinfra"
 
     /// The full model rather than `-turbo`: turbo is a pruned distillation that gives up the
@@ -91,14 +88,6 @@ public actor DeepInfraEngine: TrackTranscribing {
         return .ready
     }
 
-    /// Nothing to prepare: the model lives on their servers.
-    public func prepare(
-        for _: TranscriptionLanguage,
-        progress: @escaping @Sendable (Double) -> Void
-    ) async throws {
-        progress(1)
-    }
-
     // MARK: - Transcribing
 
     public func transcribe(
@@ -162,9 +151,8 @@ public actor DeepInfraEngine: TrackTranscribing {
         }
 
         return TrackTranscription(
-            segments: DeepInfraMapper.segments(for: decoded, track: track),
             // Whisper does not separate voices; the chain diarizes locally afterwards.
-            turns: [],
+            segments: DeepInfraMapper.segments(for: decoded, track: track),
             detectedLanguage: language == .automatic ? decoded.language : nil
         )
     }
@@ -284,20 +272,6 @@ public actor DeepInfraEngine: TrackTranscribing {
                 "No se pudo leer la respuesta de DeepInfra: \(detail). Respondió: \(body)"
             )
         }
-    }
-
-    /// A chunk is just a short track file, so it rides the same path.
-    public func transcribe(
-        chunk url: URL,
-        language: TranscriptionLanguage,
-        track: AudioTrack
-    ) async throws -> EngineTranscription {
-        let result = try await transcribe(
-            trackFile: url, track: track, language: language
-        ) { _ in }
-        return EngineTranscription(
-            segments: result.segments, detectedLanguage: result.detectedLanguage
-        )
     }
 }
 

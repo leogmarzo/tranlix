@@ -42,12 +42,14 @@ public extension SessionLanguage {
         }
     }
 
-    /// The BCP-47 locale this language resolves to by default.
+    /// The BCP-47 locale this language is transcribed under.
     ///
-    /// Spanish defaults to `es-CL` rather than `es-ES` or `es-MX`: Apple's transcriber has no
-    /// `es-AR`, and Chilean Spanish is the closest South American variant to Rioplatense.
-    /// Settings can override this per language.
-    var defaultLocaleIdentifier: String? {
+    /// Whisper drops the region before anything is sent, so the region only matters as part
+    /// of the key cached transcription results are filed under. These are the identifiers
+    /// every existing session was transcribed with — `es-CL` dates from the retired Apple
+    /// engine, which had no `es-AR` — and a different spelling would make a re-run miss its
+    /// cached batches and pay for the whole recording again.
+    public var defaultLocaleIdentifier: String? {
         switch self {
         case .spanish: "es-CL"
         case .english: "en-US"

@@ -219,7 +219,6 @@ struct RootView: View {
                 SessionView(
                     summary: summary,
                     environment: environment,
-                    settings: settings,
                     onRename: { title in
                         Task { await library.rename(summary, to: title) }
                     }

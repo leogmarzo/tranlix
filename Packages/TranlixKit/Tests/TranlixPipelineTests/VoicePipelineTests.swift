@@ -24,7 +24,7 @@ struct VoicePipelineTests {
     }
 
     private var request: PipelineRequest {
-        PipelineRequest(language: .fixed("en-US"), engineID: EngineID(rawValue: "stub"), notes: NotesRequest(
+        PipelineRequest(language: .fixed("en-US"), notes: NotesRequest(
             templates: [.general: NotesTemplate(instruction: "Summarize the meeting", title: "Notes")],
             model: "m", language: .session, allowance: .confirmedByUser()))
     }

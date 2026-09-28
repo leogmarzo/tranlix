@@ -2,10 +2,10 @@ import Foundation
 
 /// Summaries through Anthropic's Messages API.
 ///
-/// One of the two places anything leaves the machine — the other being the AssemblyAI
-/// engine, when it is chosen over the local ones. Sending the transcript is gated by an
-/// explicit confirmation rather than being a side effect of clicking "generate", and the
-/// manifest records the moment either send first happened.
+/// One of the two places anything leaves the machine — the other being the audio uploaded to
+/// DeepInfra for transcription. Sending the transcript is gated by an explicit confirmation
+/// rather than being a side effect of clicking "generate", and the manifest records the
+/// moment either send first happened.
 public struct AnthropicProvider: SummaryProvider {
     public static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
 

@@ -23,12 +23,11 @@ struct SessionView: View {
     init(
         summary: SessionSummary,
         environment: AppEnvironment,
-        settings: SettingsStore,
         onRename: @escaping (String) -> Void
     ) {
         _model = State(
             wrappedValue: SessionViewModel(
-                summary: summary, environment: environment, settings: settings
+                summary: summary, environment: environment
             )
         )
         _draftTitle = State(wrappedValue: summary.title)

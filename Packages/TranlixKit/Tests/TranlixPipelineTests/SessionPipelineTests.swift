@@ -40,45 +40,15 @@ struct SessionPipelineTests {
         }
     }
 
-    @Test("a speaker-separating engine leaves the local diarizer untouched")
-    func remoteEngineSkipsLocalDiarizer() async throws {
-        try await withTemporaryRoot { root in
-            let handle = try await recordedSession(in: root)
-            let diarizer = StubDiarizer(turns: [
-                SpeakerTurn(speakerID: "system-9", start: 0, end: 60),
-            ])
-            let pipeline = SessionPipeline(
-                engine: StubTrackEngine(),
-                diarizer: diarizer,
-                provider: StubProvider(),
-                classifier: StubClassifier()
-            )
-
-            var seen: [PipelineStage] = []
-            for try await phase in pipeline.run(session: handle, request: request()) {
-                if let stage = phase.stage, seen.last != stage { seen.append(stage) }
-            }
-
-            // The speakers came with the transcript. Running FluidAudio afterwards would
-            // overwrite them with a second opinion nobody asked for.
-            #expect(seen == [.transcription, .notes])
-            #expect(await diarizer.runs == 0)
-            #expect(await handle.readDiarization()?.diarizerID == "assemblyai")
-            #expect(await handle.manifest.diarization?.diarizerID == "assemblyai")
-            #expect(await handle.manifest.state == .ready)
-        }
-    }
-
-    @Test("a remote engine that only transcribes still gets its voices separated locally")
-    func transcribeOnlyRemoteEngineStillDiarizes() async throws {
+    @Test("voices are separated locally, because Whisper does not know who is talking")
+    func transcriptionIsFollowedByLocalDiarization() async throws {
         try await withTemporaryRoot { root in
             let handle = try await recordedSession(in: root)
             let diarizer = StubDiarizer(turns: [
                 SpeakerTurn(speakerID: "system-1", start: 0, end: 60),
             ])
             let pipeline = SessionPipeline(
-                // Whisper on somebody else's GPU: whole tracks, but no idea who is talking.
-                engine: StubTrackEngine(id: .deepInfra, separatesSpeakers: false),
+                engine: StubEngine(),
                 diarizer: diarizer,
                 provider: StubProvider(),
                 classifier: StubClassifier()
@@ -89,13 +59,68 @@ struct SessionPipelineTests {
                 if let stage = phase.stage, seen.last != stage { seen.append(stage) }
             }
 
-            // The saving that pays for this engine is the transcription, not the diarization —
-            // which is free, local, and must still run or every line is unattributed.
+            // The saving that pays for the remote engine is the transcription, not the
+            // diarization — which is free, local, and must still run or every line is
+            // unattributed.
             #expect(seen == [.transcription, .diarization, .notes])
             #expect(await diarizer.runs == 1)
             #expect(await handle.manifest.diarization?.diarizerID == "fluidaudio")
 
             let transcript = try #require(await handle.readTranscript())
+            #expect(transcript.segments.allSatisfy { $0.speakerID != nil })
+        }
+    }
+
+    @Test("re-transcribing a session from a retired engine redoes its speakers locally")
+    func retranscribingARetiredEngineSession() async throws {
+        // A session AssemblyAI transcribed, with the speakers it brought: its manifest names
+        // an engine that no longer exists and its diarization came from that engine too.
+        try await withTemporaryRoot { root in
+            let handle = try await recordedSession(in: root)
+            let retired = SessionPipeline(
+                engine: StubEngine(id: EngineID(rawValue: "assemblyai")),
+                diarizer: StubDiarizer(turns: []),
+                provider: StubProvider(),
+                classifier: StubClassifier()
+            )
+            for try await _ in retired.run(
+                session: handle, request: request(notes: nil, stages: [.transcription])
+            ) {}
+            let old = Diarization(
+                diarizerID: "assemblyai",
+                generatedAt: epoch,
+                audioFingerprint: "frames-16000",
+                turns: [SpeakerTurn(speakerID: "system-1", start: 0, end: 1)]
+            )
+            try await handle.writeDiarization(old)
+            try await handle.setDiarizationInfo(DiarizationInfo(
+                diarizerID: old.diarizerID, generatedAt: epoch, speakerCount: 1
+            ))
+            #expect(await handle.manifest.transcriptionEngine == "assemblyai")
+            #expect(await handle.manifest.state == .ready)
+
+            // What "Volver a transcribir" asks for.
+            let engine = StubEngine()
+            let diarizer = StubDiarizer(turns: [
+                SpeakerTurn(speakerID: "system-1", start: 0, end: 60),
+            ])
+            let pipeline = SessionPipeline(
+                engine: engine, diarizer: diarizer, provider: StubProvider(),
+                classifier: StubClassifier()
+            )
+            for try await _ in pipeline.run(
+                session: handle,
+                request: request(notes: nil, force: true, stages: [.transcription, .diarization])
+            ) {}
+
+            #expect(await engine.trackCallCount == 2)
+            #expect(await diarizer.runs == 1)
+            let manifest = await handle.manifest
+            #expect(manifest.transcriptionEngine == "deepinfra")
+            #expect(manifest.diarization?.diarizerID == "fluidaudio")
+            #expect(manifest.state == .ready)
+            let transcript = try #require(await handle.readTranscript())
+            #expect(transcript.engineID == "deepinfra")
             #expect(transcript.segments.allSatisfy { $0.speakerID != nil })
         }
     }
@@ -208,12 +233,12 @@ struct SessionPipelineTests {
         }
     }
 
-    @Test("an engine that cannot run this language refuses without touching the session")
+    @Test("an engine that cannot run refuses without touching the session")
     func refusalLeavesTheSessionAlone() async throws {
         try await withTemporaryRoot { root in
             let handle = try await recordedSession(in: root)
             let pipeline = SessionPipeline(
-                engine: StubEngine(availability: .unsupported(reason: "sin idioma")),
+                engine: StubEngine(availability: .unsupported(reason: "sin clave")),
                 diarizer: StubDiarizer(turns: []),
                 provider: StubProvider(),
                 classifier: StubClassifier()
@@ -237,7 +262,7 @@ struct SessionPipelineTests {
         try await withTemporaryRoot { root in
             let handle = try await recordedSession(in: root)
             let pipeline = SessionPipeline(
-                engine: StubEngine(textForChunk: { _ in Self.spanishSpeech }),
+                engine: StubEngine(text: Self.spanishSpeech),
                 diarizer: StubDiarizer(turns: []),
                 provider: StubProvider(),
                 classifier: StubClassifier()
@@ -253,8 +278,9 @@ struct SessionPipelineTests {
     func leavesTheLanguageUnknownWhenItCannotTell() async throws {
         try await withTemporaryRoot { root in
             let handle = try await recordedSession(in: root)
-            // The stub's default text is a file name, which is not a language. Recording a
-            // guess made from that would be worse than recording nothing.
+            // The stub's default text is a single greeting, which is not enough to tell a
+            // language by. Recording a guess made from that would be worse than recording
+            // nothing.
             let pipeline = SessionPipeline(
                 engine: StubEngine(),
                 diarizer: StubDiarizer(turns: []),
@@ -274,7 +300,7 @@ struct SessionPipelineTests {
             let handle = try await recordedSession(in: root)
             let provider = StubProvider()
             let pipeline = SessionPipeline(
-                engine: StubEngine(textForChunk: { _ in Self.englishSpeech }),
+                engine: StubEngine(text: Self.englishSpeech),
                 diarizer: StubDiarizer(turns: []),
                 provider: provider,
                 classifier: StubClassifier()
@@ -296,7 +322,7 @@ struct SessionPipelineTests {
             let handle = try await recordedSession(in: root)
             let provider = StubProvider()
             let pipeline = SessionPipeline(
-                engine: StubEngine(textForChunk: { _ in Self.spanishSpeech }),
+                engine: StubEngine(text: Self.spanishSpeech),
                 diarizer: StubDiarizer(turns: []),
                 provider: provider,
                 classifier: StubClassifier()
@@ -336,7 +362,7 @@ struct SessionPipelineTests {
             let handle = try await recordedSession(in: root)
             let provider = StubProvider()
             let pipeline = SessionPipeline(
-                engine: StubEngine(textForChunk: { _ in Self.englishSpeech }),
+                engine: StubEngine(text: Self.englishSpeech),
                 diarizer: StubDiarizer(turns: []),
                 provider: provider,
                 classifier: StubClassifier()
@@ -492,7 +518,7 @@ struct SessionPipelineTests {
         provider: StubProvider = StubProvider()
     ) -> SessionPipeline {
         SessionPipeline(
-            engine: StubEngine(textForChunk: { _ in Self.spanishSpeech }),
+            engine: StubEngine(text: Self.spanishSpeech),
             diarizer: StubDiarizer(turns: []),
             provider: provider,
             classifier: classifier
@@ -530,13 +556,11 @@ private func notesRequest(language: NotesLanguage = .session) -> NotesRequest? {
 }
 
 private func request(
-    notes: NotesRequest? = notesRequest()
+    notes: NotesRequest? = notesRequest(),
+    force: Bool = false,
+    stages: Set<PipelineStage> = Set(PipelineStage.allCases)
 ) -> PipelineRequest {
-    PipelineRequest(
-        language: .fixed("es-CL"),
-        engineID: EngineID(rawValue: "stub"),
-        notes: notes
-    )
+    PipelineRequest(language: .fixed("es-CL"), notes: notes, force: force, stages: stages)
 }
 
 /// A session with real chunk files on disk, stopped and ready to be processed.

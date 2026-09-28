@@ -16,19 +16,24 @@ struct TranscriptionPipelineTests {
     /// and durations off the disk.
     private func session(
         in root: URL,
-        micChunks: [Int64] = [16000, 16000],
+        micChunks: [Int64] = [16000],
         systemChunks: [Int64] = [16000],
         micStart: TimeInterval = 100,
         systemStart: TimeInterval = 100
     ) async throws -> SessionHandle {
         let store = SessionStore(root: root)
-        let handle = try store.createSession(title: "Clase", language: .spanish, now: epoch)
+        let handle = try store.createSession(title: "Reunión", language: .spanish, now: epoch)
         let layout = await handle.layout
 
         for (track, frames) in [(AudioTrack.mic, micChunks), (AudioTrack.system, systemChunks)] {
             var start: Int64 = 0
             for (index, count) in frames.enumerated() {
-                try writeSilentChunk(track: track, index: index, frames: count, into: layout)
+                try FileManager.default.createDirectory(
+                    at: layout.chunksDirectory, withIntermediateDirectories: true
+                )
+                try SilentAudio.writeChunk(
+                    to: layout.chunkURL(track: track, index: index), frames: count
+                )
                 try await handle.appendChunk(
                     ChunkRef(
                         index: index,
@@ -42,159 +47,103 @@ struct TranscriptionPipelineTests {
             }
         }
         try await handle.recordFirstBuffer(hostTime: micStart, for: .mic)
-        try await handle.recordFirstBuffer(hostTime: systemStart, for: .system)
+        if !systemChunks.isEmpty {
+            try await handle.recordFirstBuffer(hostTime: systemStart, for: .system)
+        }
         try await handle.setState(.recorded)
         return handle
     }
 
-    private func writeSilentChunk(
-        track: AudioTrack, index: Int, frames: Int64, into layout: SessionLayout
-    ) throws {
-        try FileManager.default.createDirectory(
-            at: layout.chunksDirectory, withIntermediateDirectories: true
-        )
-        let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false
-        )!
-        let file = try AVAudioFile(
-            forWriting: layout.chunkURL(track: track, index: index),
-            settings: [
-                AVFormatIDKey: kAudioFormatLinearPCM,
-                AVSampleRateKey: 16000,
-                AVNumberOfChannelsKey: 1,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsFloatKey: false,
-                AVLinearPCMIsBigEndianKey: false,
-                AVLinearPCMIsNonInterleaved: false,
-            ],
-            commonFormat: .pcmFormatFloat32,
-            interleaved: false
-        )
-        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames))!
-        buffer.frameLength = AVAudioFrameCount(frames)
-        try file.write(from: buffer)
-    }
+    // MARK: - The happy path
 
-    // MARK: - Transcription
-
-    @Test("every chunk of both tracks is transcribed once")
-    func transcribesEveryChunk() async throws {
+    @Test("one request per track, merged into one chronological transcript")
+    func transcribesWholeTracks() async throws {
         try await withTemporaryRoot { root in
             let handle = try await session(in: root)
             let engine = StubEngine()
-            let pipeline = TranscriptionPipeline(engine: engine)
 
-            let transcript = try await pipeline.transcribe(
+            let transcript = try await TranscriptionPipeline(engine: engine).transcribe(
                 session: handle, language: language, progress: { _ in }
             )
 
-            #expect(await engine.transcribeCallCount == 3) // two mic chunks, one system
-            #expect(transcript.segments.count == 6)
-            #expect(transcript.engineID == "stub")
-            #expect(transcript.localeIdentifier == "es-CL")
+            #expect(await engine.transcribedTracks == [.mic, .system])
+            #expect(transcript.engineID == "deepinfra")
+            #expect(transcript.segments.count == 2)
+            #expect(zip(transcript.segments, transcript.segments.dropFirst())
+                .allSatisfy { $0.start <= $1.start })
             #expect(await handle.manifest.state == .transcribed)
-            #expect(await handle.manifest.transcriptionEngine == "stub")
+            #expect(await handle.manifest.transcriptionEngine == "deepinfra")
         }
     }
 
-    @Test("chunk times are shifted onto the session timeline, track offset included")
+    @Test("track times are shifted onto the session timeline, offset included")
     func timesBecomeSessionAbsolute() async throws {
         try await withTemporaryRoot { root in
-            // The mic starts half a second after the system tap, as it does in practice.
-            let handle = try await session(in: root, micStart: 100.5, systemStart: 100)
-            let pipeline = TranscriptionPipeline(engine: StubEngine())
+            // The system tap started half a second after the microphone this time.
+            let handle = try await session(in: root, micStart: 100, systemStart: 100.5)
 
-            let transcript = try await pipeline.transcribe(
-                session: handle, language: language, progress: { _ in }
-            )
+            let transcript = try await TranscriptionPipeline(engine: StubEngine())
+                .transcribe(session: handle, language: language, progress: { _ in })
 
-            let mic = transcript.segments
-                .filter { $0.track == .mic }
-                .map(\.start)
-                .sorted()
-            // The stub emits segments at 0 s and 2 s within each chunk. Chunk 0 begins at 0 s
-            // on the mic's own clock and chunk 1 at 1 s, and the whole track is displaced by
-            // the half second the microphone took to start.
-            #expect(zip(mic, [0.5, 1.5, 2.5, 3.5]).allSatisfy { abs($0 - $1) < 1e-6 })
-            #expect(mic.count == 4)
+            let system = transcript.segments.filter { $0.track == .system }.map(\.start)
+            #expect(system.count == 1)
+            #expect(abs((system.first ?? 0) - 0.5) < 1e-6)
 
-            // The system tap defines the session start, so its times are unshifted.
-            let system = transcript.segments.filter { $0.track == .system }.map(\.start).sorted()
-            #expect(zip(system, [0.0, 2.0]).allSatisfy { abs($0 - $1) < 1e-6 })
-        }
-    }
-
-    @Test("word timings are shifted with their segment")
-    func wordTimesAreShiftedToo() async throws {
-        try await withTemporaryRoot { root in
-            let handle = try await session(in: root, micStart: 100.5, systemStart: 100)
-            let pipeline = TranscriptionPipeline(engine: StubEngine())
-
-            let transcript = try await pipeline.transcribe(
-                session: handle, language: language, progress: { _ in }
-            )
             let word = try #require(
-                transcript.segments.first { $0.track == .mic && !$0.words.isEmpty }?.words.first
+                transcript.segments.first { $0.track == .system }?.words.first
             )
-            // A word left on chunk-relative time would silently break diarization alignment.
             #expect(abs(word.start - 0.5) < 1e-6)
         }
     }
 
-    @Test("both tracks are interleaved into one chronological timeline")
-    func segmentsAreChronological() async throws {
+    // MARK: - Speakers are the diarizer's job
+
+    @Test("transcribing writes no speakers, leaving them to the local diarizer")
+    func writesNoDiarization() async throws {
         try await withTemporaryRoot { root in
             let handle = try await session(in: root)
-            let pipeline = TranscriptionPipeline(engine: StubEngine())
 
-            let transcript = try await pipeline.transcribe(
-                session: handle, language: language, progress: { _ in }
-            )
+            let transcript = try await TranscriptionPipeline(engine: StubEngine())
+                .transcribe(session: handle, language: language, progress: { _ in })
 
-            #expect(zip(transcript.segments, transcript.segments.dropFirst())
-                .allSatisfy { $0.start <= $1.start })
-            #expect(Set(transcript.segments.map(\.track)) == [.mic, .system])
+            #expect(transcript.segments.allSatisfy { $0.speakerID == nil })
+            #expect(await handle.readDiarization() == nil)
+            #expect(await handle.manifest.diarization == nil)
         }
     }
 
-    // MARK: - Resuming
-
-    @Test("a failed run keeps the chunks it finished and redoes only the rest")
-    func resumesWhereItFailed() async throws {
+    @Test("a session with no system audio only sends the microphone")
+    func micOnlySession() async throws {
         try await withTemporaryRoot { root in
-            let handle = try await session(in: root, micChunks: [16000, 16000, 16000])
-            let engine = StubEngine(failAfter: 2)
-            let pipeline = TranscriptionPipeline(engine: engine)
+            let handle = try await session(in: root, systemChunks: [])
+            let engine = StubEngine()
 
-            await #expect(throws: TranscriptionError.self) {
-                try await pipeline.transcribe(
-                    session: handle, language: self.language, progress: { _ in }
-                )
-            }
-            #expect(await engine.transcribeCallCount == 2)
-            // The session stays mid-flight, which is exactly what recovery understands.
-            #expect(await handle.manifest.state == .transcribing)
+            let transcript = try await TranscriptionPipeline(engine: engine)
+                .transcribe(session: handle, language: language, progress: { _ in })
 
-            await engine.setFailAfter(nil)
-            let reusedAtEnd = Locked(0)
-            let transcript = try await pipeline.transcribe(
-                session: handle,
-                language: language,
-                progress: { phase in
-                    if case let .transcribing(_, _, reused) = phase {
-                        reusedAtEnd.withValue { $0 = max($0, reused) }
-                    }
-                }
-            )
-
-            // Four chunks in total; the two already done were not transcribed again.
-            #expect(await engine.transcribeCallCount == 4)
-            #expect(reusedAtEnd.value == 2)
-            #expect(transcript.segments.count == 8)
+            #expect(await engine.transcribedTracks == [.mic])
+            #expect(transcript.segments.allSatisfy { $0.track == .mic })
         }
     }
 
-    @Test("a second run with the same engine and language redoes nothing")
+    // MARK: - The audit trail
+
+    @Test("uploading is recorded once, before anything leaves the machine")
+    func recordsAudioSharing() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            #expect(await handle.manifest.audioSharedAt == nil)
+
+            try await TranscriptionPipeline(engine: StubEngine())
+                .transcribe(session: handle, language: language, progress: { _ in })
+
+            #expect(await handle.manifest.audioSharedAt != nil)
+        }
+    }
+
+    // MARK: - Caching and resuming
+
+    @Test("a second run reuses both track results instead of paying for them again")
     func secondRunIsFullyCached() async throws {
         try await withTemporaryRoot { root in
             let handle = try await session(in: root)
@@ -204,74 +153,485 @@ struct TranscriptionPipelineTests {
             try await pipeline.transcribe(session: handle, language: language, progress: { _ in })
             try await pipeline.transcribe(session: handle, language: language, progress: { _ in })
 
-            #expect(await engine.transcribeCallCount == 3)
+            #expect(await engine.trackCallCount == 2)
         }
     }
 
-    @Test("changing the language invalidates the cached results")
-    func differentLanguageIsNotReused() async throws {
+    @Test("the cache survives archiving, because the audio did not change")
+    func cacheSurvivesArchiving() async throws {
         try await withTemporaryRoot { root in
             let handle = try await session(in: root)
             let engine = StubEngine()
             let pipeline = TranscriptionPipeline(engine: engine)
 
+            // The full run compresses the chunks into per-track archives at the end.
+            try await pipeline.process(session: handle, language: language, progress: { _ in })
+            #expect(await engine.trackCallCount == 2)
+
+            // A re-run now sources from the archive. Same audio, same result, no new jobs.
             try await pipeline.transcribe(session: handle, language: language, progress: { _ in })
+            #expect(await engine.trackCallCount == 2)
+        }
+    }
+
+    @Test("a run that failed on the second track redoes only that one")
+    func resumesAtTheFailedTrack() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(failAfter: 1)
+            let pipeline = TranscriptionPipeline(engine: engine)
+
+            await #expect(throws: TranscriptionError.self) {
+                try await pipeline.transcribe(
+                    session: handle, language: self.language, progress: { _ in }
+                )
+            }
+            #expect(await engine.trackCallCount == 1)
+
+            await engine.setFailAfter(nil)
+            try await pipeline.transcribe(session: handle, language: language, progress: { _ in })
+
+            // Two calls in total for the retry to finish: the mic result was on disk.
+            #expect(await engine.trackCallCount == 2)
+        }
+    }
+
+    // MARK: - Language
+
+    @Test("the language detected on the first track pins the second")
+    func detectionPinsTheSecondTrack() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(detectedLanguage: "en")
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: .automatic, progress: { _ in }
+            )
+
+            #expect(await engine.requestedLanguages == [.automatic, .fixed("en")])
+            #expect(await handle.manifest.resolvedLocaleIdentifier == "en")
+        }
+    }
+
+    @Test("a track read as an unsupported language leaves the next one free to answer")
+    func unsupportedDetectionDoesNotPinTheOtherTrack() async throws {
+        // The session that produced this test: the microphone went first, held a person
+        // listening in silence, and came back from Whisper as Ukrainian. That answer became
+        // the language the *system* track — the meeting itself, in English — was told to
+        // decode, and the transcript came back in Cyrillic.
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(
+                detectedLanguageForTrack: { $0 == .mic ? "uk" : "en" }
+            )
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: .automatic, progress: { _ in }
+            )
+
+            #expect(await engine.requestedLanguages == [.automatic, .automatic])
+            #expect(await handle.manifest.resolvedLocaleIdentifier == "en")
+        }
+    }
+
+    @Test("a batch that decoded silence does not get to name the language")
+    func decodedSilenceDoesNotPin() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(
+                detectedLanguage: "en",
+                segmentsForTrack: { track in
+                    guard track == .mic else {
+                        return [TranscriptSegment(
+                            track: track, start: 0, end: 1, text: "Bueno, arrancamos."
+                        )]
+                    }
+                    return (0 ..< 10).map { index in
+                        TranscriptSegment(
+                            track: track, start: Double(index), end: Double(index) + 1,
+                            text: "Дякую!"
+                        )
+                    }
+                }
+            )
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: .automatic, progress: { _ in }
+            )
+
+            #expect(await engine.requestedLanguages == [.automatic, .automatic])
+            #expect(await handle.manifest.resolvedLocaleIdentifier == "en")
+        }
+    }
+
+    // MARK: - Progress
+
+    @Test("the strip narrates preparing, uploading and the wait, in an order that ascends")
+    func reportsRemotePhases() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let phases = Locked<[TranscriptionPhase]>([])
+
+            try await TranscriptionPipeline(engine: StubEngine()).transcribe(
+                session: handle, language: language,
+                progress: { phase in phases.withValue { $0.append(phase) } }
+            )
+
+            let seen = phases.value
+            #expect(seen.contains(.preparingUpload))
+            #expect(seen.contains { if case .uploading = $0 { true } else { false } })
+            #expect(seen.contains { if case .waitingRemote = $0 { true } else { false } })
+            let fractions = seen.map(\.fraction)
+            #expect(zip(fractions, fractions.dropFirst()).allSatisfy { $0 <= $1 })
+        }
+    }
+
+    // MARK: - Batching
+
+    /// Times a batch can be recognised by: a quarter-second segment a quarter-second in.
+    private static func marker(for track: AudioTrack) -> [TranscriptSegment] {
+        [TranscriptSegment(
+            track: track, speakerID: nil, start: 0.25, end: 0.5, text: "marca",
+            words: [TranscriptWord(text: "marca", start: 0.25, end: 0.5)]
+        )]
+    }
+
+    @Test("an engine with an upload ceiling gets one request per batch, not per track")
+    func batchesAreSentSeparately() async throws {
+        try await withTemporaryRoot { root in
+            // Four seconds a track, in one-second chunks, with a two-second ceiling.
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000, 16000, 16000],
+                systemChunks: [16000, 16000, 16000, 16000]
+            )
+            let engine = StubEngine(maxUploadSeconds: 2)
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            #expect(await engine.trackCallCount == 4)
+            // Not merely more calls: the audio was actually cut. Two chunks each.
+            let seconds = await engine.transcribedSeconds
+            #expect(seconds.allSatisfy { abs($0 - 2.0) <= 1.0 })
+        }
+    }
+
+    @Test("failing partway through a track costs one batch, not the track")
+    func aFailedBatchCostsOneBatch() async throws {
+        try await withTemporaryRoot { root in
+            // Four one-second batches on the microphone alone, so the arithmetic is plain.
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000, 16000, 16000],
+                systemChunks: []
+            )
+            let engine = StubEngine(
+                failAfter: 2, maxUploadSeconds: 1
+            )
+            let pipeline = TranscriptionPipeline(engine: engine)
+
+            await #expect(throws: (any Error).self) {
+                try await pipeline.transcribe(
+                    session: handle, language: self.language, progress: { _ in }
+                )
+            }
+            #expect(await engine.trackCallCount == 2)
+
+            // This is the assertion the whole change exists for. Before batching, a failure
+            // anywhere in a track threw the whole track away and the retry paid for all four
+            // seconds again; now it pays for the two that never landed.
+            await engine.setFailAfter(nil)
             try await pipeline.transcribe(
-                session: handle, language: .fixed("en-US"), progress: { _ in }
+                session: handle, language: language, progress: { _ in }
             )
-
-            #expect(await engine.transcribeCallCount == 6)
+            #expect(await engine.trackCallCount == 4)
         }
     }
 
-    @Test("the two engines keep separate results and neither invalidates the other")
-    func enginesDoNotShareCache() async throws {
+    @Test("without an upload ceiling each track is exactly one request")
+    func wholeTrackEnginesAreUnchanged() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000, 16000, 16000],
+                systemChunks: [16000, 16000, 16000, 16000]
+            )
+            // No ceiling: each track goes up whole.
+            let engine = StubEngine()
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            #expect(await engine.trackCallCount == 2)
+            #expect(await engine.transcribedTracks == [.mic, .system])
+        }
+    }
+
+    @Test("each batch's times land where that batch begins, words included")
+    func batchTimesAreRebasedByPosition() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000, 16000],
+                systemChunks: [],
+                micStart: 100
+            )
+            let engine = StubEngine(
+                maxUploadSeconds: 1,
+                segmentsForTrack: { Self.marker(for: $0) }
+            )
+
+            let transcript = try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            // Batch-relative 0.25 plus where each batch starts in the track. Using the bare
+            // track offset here instead would stack all three on top of each other.
+            #expect(transcript.segments.map(\.start) == [0.25, 1.25, 2.25])
+            #expect(transcript.segments.compactMap { $0.words.first?.start } == [0.25, 1.25, 2.25])
+        }
+    }
+
+    @Test("what is stored stays batch-relative, so a re-run can rebase it again")
+    func storedSegmentsStayBatchRelative() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000, 16000],
+                systemChunks: []
+            )
+            let engine = StubEngine(
+                maxUploadSeconds: 1,
+                segmentsForTrack: { Self.marker(for: $0) }
+            )
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            // The third batch is filed under its first chunk's index, and holds the engine's
+            // own answer untouched.
+            let stored = await handle.chunkTranscript(
+                engineID: engine.id.rawValue, track: .mic, chunkIndex: 2
+            )
+            #expect(stored?.segments.first?.start == 0.25)
+            #expect(stored?.chunkFingerprint == "batch-32000-16000")
+        }
+    }
+
+    @Test("the batch cache survives archiving, because the audio did not change")
+    func batchCacheSurvivesArchiving() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000, 16000, 16000],
+                systemChunks: [16000, 16000]
+            )
+            let engine = StubEngine(maxUploadSeconds: 2)
+            let pipeline = TranscriptionPipeline(engine: engine)
+
+            // `process` archives, which deletes the CAFs the first run read.
+            try await pipeline.process(
+                session: handle, language: language, progress: { _ in }
+            )
+            let afterFirst = await engine.trackCallCount
+
+            try await pipeline.transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            // Fingerprinted by frame range, never by what the encoder produced, so nothing
+            // is uploaded — or paid for — a second time.
+            #expect(await engine.trackCallCount == afterFirst)
+        }
+    }
+
+    @Test("a session transcribed before batching is not paid for twice")
+    func legacyWholeTrackResultsAreStillHonoured() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000],
+                systemChunks: [16000, 16000]
+            )
+            let engine = StubEngine(maxUploadSeconds: 1)
+
+            // Exactly what the whole-track path used to write: chunk zero, fingerprinted by
+            // the track's total frames.
+            for track in AudioTrack.allCases {
+                try await handle.writeChunkTranscript(ChunkTranscript(
+                    chunkIndex: 0,
+                    track: track,
+                    engineID: engine.id.rawValue,
+                    localeIdentifier: language.identifier,
+                    chunkFingerprint: "frames-32000",
+                    generatedAt: epoch,
+                    segments: Self.marker(for: track)
+                ))
+            }
+
+            let transcript = try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            #expect(await engine.trackCallCount == 0)
+            #expect(transcript.segments.count == 2)
+        }
+    }
+
+    @Test("smaller uploads reuse completed larger batches and resume only missing audio")
+    func smallerUploadsPreserveCachedBatches() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root, micChunks: [16000, 16000, 16000, 16000], systemChunks: []
+            )
+            let original = StubEngine(
+                failAfter: 1, maxUploadSeconds: 2,
+                segmentsForTrack: { Self.marker(for: $0) }
+            )
+            await #expect(throws: (any Error).self) {
+                try await TranscriptionPipeline(engine: original).transcribe(
+                    session: handle, language: self.language, progress: { _ in }
+                )
+            }
+            let resumed = StubEngine(
+                maxUploadSeconds: 1,
+                segmentsForTrack: { Self.marker(for: $0) }
+            )
+            let pipeline = TranscriptionPipeline(engine: resumed)
+            let transcript = try await pipeline.transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+            #expect(await resumed.trackCallCount == 2)
+            #expect(transcript.segments.map(\.start) == [0.25, 2.25, 3.25])
+            let cached = await handle.chunkTranscript(
+                engineID: resumed.id.rawValue, track: .mic, chunkIndex: 0
+            )
+            #expect(cached?.chunkFingerprint == "batch-0-32000")
+            try await pipeline.transcribe(session: handle, language: language, progress: { _ in })
+            #expect(await resumed.trackCallCount == 2)
+        }
+    }
+
+    @Test("a retry does not walk the progress bar backwards")
+    func retryingKeepsFractionsAscending() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(
+                in: root,
+                micChunks: [16000, 16000],
+                systemChunks: [16000, 16000]
+            )
+            let phases = Locked<[TranscriptionPhase]>([])
+            let engine = StubEngine(maxUploadSeconds: 1)
+
+            try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language,
+                progress: { phase in phases.withValue { $0.append(phase) } }
+            )
+
+            let seen = phases.value
+            // Four batches, so the strip has to name which one.
+            #expect(seen.contains { phase in
+                if case let .uploading(batch, _) = phase { batch.total == 4 } else { false }
+            })
+            let fractions = seen.map { $0.fraction }
+            #expect(zip(fractions, fractions.dropFirst()).allSatisfy { $0 <= $1 })
+        }
+    }
+
+    // MARK: - Cancelling
+
+    @Test("cancelling stops the run and puts the session back, rather than failing it")
+    func cancellingRevertsRatherThanFails() async throws {
         try await withTemporaryRoot { root in
             let handle = try await session(in: root)
-            let apple = StubEngine(id: EngineID(rawValue: "apple"))
-            let whisper = StubEngine(id: EngineID(rawValue: "whisperkit"))
+            let engine = StubEngine(delayPerTrack: .milliseconds(150))
 
-            try await TranscriptionPipeline(engine: apple)
-                .transcribe(session: handle, language: language, progress: { _ in })
-            try await TranscriptionPipeline(engine: whisper)
-                .transcribe(session: handle, language: language, progress: { _ in })
-            // Back to the first engine: its work is still there.
-            try await TranscriptionPipeline(engine: apple)
-                .transcribe(session: handle, language: language, progress: { _ in })
+            let task = Task {
+                try await TranscriptionPipeline(engine: engine)
+                    .process(session: handle, language: self.language, progress: { _ in })
+            }
+            try await Task.sleep(for: .milliseconds(60))
+            task.cancel()
+            _ = try? await task.value
 
-            #expect(await apple.transcribeCallCount == 3)
-            #expect(await whisper.transcribeCallCount == 3)
+            #expect(await handle.manifest.state == .recorded)
+            #expect(await handle.manifest.failure == nil)
         }
     }
 
-    @Test("a chunk replaced on disk is transcribed again rather than trusted")
-    func changedChunkInvalidatesItsResult() async throws {
-        try await withTemporaryRoot { root in
-            let handle = try await session(in: root, micChunks: [16000], systemChunks: [])
-            let engine = StubEngine()
-            let pipeline = TranscriptionPipeline(engine: engine)
-            try await pipeline.transcribe(session: handle, language: language, progress: { _ in })
-            #expect(await engine.transcribeCallCount == 1)
+    // MARK: - Silence
 
-            // Same chunk index and frame count, different bytes.
-            let layout = await handle.layout
-            try writeSilentChunk(track: .mic, index: 0, frames: 32000, into: layout)
-            try await handle.appendChunk(
-                ChunkRef(index: 0, fileName: "mic-0000.caf", startFrame: 0, frameCount: 32000),
-                to: .mic
+    @Test("what the engine wrote over a silent track does not reach the transcript")
+    func dropsHallucinationsFromAWholeTrack() async throws {
+        // The affordx session: a microphone that recorded a listener came back as 202
+        // segments, 144 of them "Thank you.", while the system track carried the real
+        // conversation. The transcript has to keep the second and lose the first.
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(segmentsForTrack: { track in
+                switch track {
+                case .mic:
+                    (0 ..< 12).map {
+                        TranscriptSegment(
+                            track: .mic, start: Double($0) * 5, end: Double($0) * 5 + 1,
+                            text: "Thank you."
+                        )
+                    }
+                case .system:
+                    [TranscriptSegment(
+                        track: .system, start: 0, end: 4,
+                        text: "Bueno, arrancamos con el informe."
+                    )]
+                }
+            })
+
+            let transcript = try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
             )
 
-            try await pipeline.transcribe(session: handle, language: language, progress: { _ in })
-            #expect(await engine.transcribeCallCount == 2)
+            #expect(transcript.segments.map(\.text) == ["Bueno, arrancamos con el informe."])
         }
     }
 
-    // MARK: - Archiving
+    @Test("the engine's own output is still stored, so the filter can be revisited")
+    func keepsTheRawTrackResultOnDisk() async throws {
+        // The filter runs on the way to the transcript, never on the way to disk. Storing
+        // what the engine actually said is what makes a re-run cost nothing and what would
+        // let a future version rescue a segment this one dropped.
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            let engine = StubEngine(segmentsForTrack: { track in
+                track == .mic
+                    ? (0 ..< 12).map {
+                        TranscriptSegment(
+                            track: .mic, start: Double($0) * 5, end: Double($0) * 5 + 1,
+                            text: "Thank you."
+                        )
+                    }
+                    : []
+            })
+
+            _ = try await TranscriptionPipeline(engine: engine).transcribe(
+                session: handle, language: language, progress: { _ in }
+            )
+
+            let stored = await handle.chunkTranscript(
+                engineID: engine.id.rawValue, track: .mic, chunkIndex: 0
+            )
+            #expect(stored?.segments.count == 12)
+        }
+    }
+
+    // MARK: - Archiving and failure
 
     @Test("audio is archived and the chunks removed only once transcription succeeded")
     func processArchivesAfterTranscribing() async throws {
         try await withTemporaryRoot { root in
-            let handle = try await session(in: root)
+            let handle = try await session(in: root, micChunks: [16000, 16000])
             let layout = await handle.layout
             let chunkURLs = await handle.manifest.track(.mic).chunks.map { layout.chunkURL($0) }
 
@@ -377,10 +737,10 @@ struct TranscriptionPipelineTests {
                 .process(session: handle, language: language, progress: { _ in })
             #expect(await handle.manifest.state == .ready)
 
+            // Another language, so nothing is served from the cache and the engine is asked.
             await #expect(throws: TranscriptionError.self) {
-                try await TranscriptionPipeline(
-                    engine: StubEngine(id: EngineID(rawValue: "apple"), failAfter: 0)
-                ).process(session: handle, language: self.language, progress: { _ in })
+                try await TranscriptionPipeline(engine: StubEngine(failAfter: 0))
+                    .process(session: handle, language: .fixed("en-US"), progress: { _ in })
             }
 
             let manifest = await handle.manifest
@@ -389,146 +749,68 @@ struct TranscriptionPipelineTests {
         }
     }
 
-    @Test("cancelling stops the run and puts the session back, rather than failing it")
-    func cancellingRevertsRatherThanFails() async throws {
-        try await withTemporaryRoot { root in
-            let handle = try await session(in: root, micChunks: [16000, 16000, 16000])
-            try await handle.setState(.recorded)
-            let engine = StubEngine(delayPerChunk: .milliseconds(80))
-
-            let task = Task {
-                try await TranscriptionPipeline(engine: engine)
-                    .process(session: handle, language: self.language, progress: { _ in })
-            }
-            try await Task.sleep(for: .milliseconds(120))
-            task.cancel()
-            _ = try? await task.value
-
-            // Cancelling is not failing: the recording is untouched and can be run again.
-            #expect(await handle.manifest.state == .recorded)
-            #expect(await handle.manifest.failure == nil)
-
-            // And it actually stopped, instead of running on in the background while the UI
-            // claimed otherwise.
-            let afterCancel = await engine.transcribeCallCount
-            try await Task.sleep(for: .milliseconds(250))
-            #expect(await engine.transcribeCallCount == afterCancel)
-        }
-    }
-
-    @Test("re-transcribing an archived session still works, and still resumes")
-    func retranscribesFromArchive() async throws {
-        try await withTemporaryRoot { root in
-            let handle = try await session(in: root, micChunks: [16000], systemChunks: [])
-            try await TranscriptionPipeline(engine: StubEngine(id: EngineID(rawValue: "apple")))
-                .process(session: handle, language: language, progress: { _ in })
-
-            // The CAFs are gone; only the compressed archive is left.
-            let layout = await handle.layout
-            #expect(FileManager.default.entries(in: layout.chunksDirectory).isEmpty)
-
-            // A second engine runs over the same session a year later. Quarter-second pieces
-            // so the one-second archive yields several, and failing partway leaves something
-            // worth resuming.
-            let whisper = StubEngine(id: EngineID(rawValue: "whisperkit"), failAfter: 2)
-            let pipeline = TranscriptionPipeline(engine: whisper, splitChunkSeconds: 0.25)
-
-            await #expect(throws: TranscriptionError.self) {
-                try await pipeline.transcribe(
-                    session: handle, language: self.language, progress: { _ in }
-                )
-            }
-            let afterFailure = await whisper.transcribeCallCount
-            #expect(afterFailure == 2)
-
-            await whisper.setFailAfter(nil)
-            let reused = Locked(0)
-            try await pipeline.transcribe(
-                session: handle,
-                language: language,
-                progress: { phase in
-                    if case let .transcribing(_, _, count) = phase {
-                        reused.withValue { $0 = max($0, count) }
-                    }
-                }
-            )
-
-            // The pieces the failed run finished were not transcribed a second time. That is
-            // the promise being checked: resumability survives the audio being compressed,
-            // because splitting the same archive the same way reproduces the same pieces.
-            #expect(reused.value == afterFailure)
-            #expect(await handle.manifest.state == .transcribed)
-        }
-    }
-
-    @Test("an engine that needs downloading is prepared first")
-    func preparesEngineWhenNeeded() async throws {
+    @Test("an engine that cannot run is refused before anything is sent")
+    func unavailableEngineThrows() async throws {
         try await withTemporaryRoot { root in
             let handle = try await session(in: root)
-            let engine = StubEngine(availability: .needsDownload(estimatedBytes: 100))
-            let sawPreparing = Locked(false)
-
-            try await TranscriptionPipeline(engine: engine).transcribe(
-                session: handle,
-                language: language,
-                progress: { if case .preparingEngine = $0 { sawPreparing.value = true } }
-            )
-
-            #expect(await engine.prepareCount == 1)
-            #expect(sawPreparing.value)
-        }
-    }
-
-    @Test("an unsupported language is refused instead of transcribed wrongly")
-    func unsupportedLanguageThrows() async throws {
-        try await withTemporaryRoot { root in
-            let handle = try await session(in: root)
-            let engine = StubEngine(availability: .unsupported(reason: "sin soporte"))
+            let engine = StubEngine(availability: .unsupported(reason: "falta la clave"))
 
             await #expect(throws: TranscriptionError.self) {
                 try await TranscriptionPipeline(engine: engine).transcribe(
                     session: handle, language: self.language, progress: { _ in }
                 )
             }
-            #expect(await engine.transcribeCallCount == 0)
+            #expect(await engine.trackCallCount == 0)
+            #expect(await handle.manifest.audioSharedAt == nil)
         }
     }
 
-    // MARK: - Language detection
+    // MARK: - Sessions from retired engines
 
-    @Test("the language detected on the first chunk is used for the rest of them")
-    func detectionPinsTheRemainingChunks() async throws {
+    @Test("a session transcribed by a retired engine is transcribed again, not reused")
+    func retiredEngineSessionIsRetranscribed() async throws {
+        // Sessions from before DeepInfra was the only engine still carry `whisperkit`,
+        // `apple` or `assemblyai` in their manifest and their cached results. Those results
+        // are another engine's and must not be passed off as this one's.
         try await withTemporaryRoot { root in
             let handle = try await session(in: root)
-            let engine = StubEngine(detectedLanguage: "en")
+            let retired = StubEngine(id: EngineID(rawValue: "whisperkit"))
+            try await TranscriptionPipeline(engine: retired)
+                .process(session: handle, language: language, progress: { _ in })
+            #expect(await handle.manifest.transcriptionEngine == "whisperkit")
 
-            try await TranscriptionPipeline(engine: engine).transcribe(
-                session: handle, language: .automatic, progress: { _ in }
-            )
+            // Sourced from the archive now: the chunks went when the first run finished.
+            let engine = StubEngine()
+            let transcript = try await TranscriptionPipeline(engine: engine)
+                .process(session: handle, language: language, progress: { _ in })
 
-            // Detecting per chunk is what the design rejects: a class taught in Spanish that
-            // quotes English terminology would flap between languages mid-session.
-            #expect(
-                await engine.requestedLanguages
-                    == [.automatic, .fixed("en"), .fixed("en")]
-            )
+            #expect(await engine.trackCallCount == 2)
+            #expect(transcript.engineID == "deepinfra")
+            let manifest = await handle.manifest
+            #expect(manifest.transcriptionEngine == "deepinfra")
+            #expect(manifest.state == .ready)
+            // The old engine's results stay where they were: nothing on disk is rewritten
+            // under a name that did not produce it.
+            let old = await handle.chunkTranscript(engineID: "whisperkit", track: .mic, chunkIndex: 0)
+            #expect(old != nil)
         }
     }
 
-    @Test("what actually ran is recorded, not the nothing that was asked for")
-    func detectedLanguageReachesTheManifest() async throws {
+    // MARK: - Language, across runs
+
+    @Test("changing the language invalidates the cached results")
+    func differentLanguageIsNotReused() async throws {
         try await withTemporaryRoot { root in
             let handle = try await session(in: root)
-            let engine = StubEngine(detectedLanguage: "en")
+            let engine = StubEngine()
+            let pipeline = TranscriptionPipeline(engine: engine)
 
-            let transcript = try await TranscriptionPipeline(engine: engine).transcribe(
-                session: handle, language: .automatic, progress: { _ in }
+            try await pipeline.transcribe(session: handle, language: language, progress: { _ in })
+            try await pipeline.transcribe(
+                session: handle, language: .fixed("en-US"), progress: { _ in }
             )
 
-            // `.automatic` has no identifier, so this field used to be left nil for exactly the
-            // sessions whose language nobody had written down anywhere.
-            #expect(await handle.manifest.resolvedLocaleIdentifier == "en")
-            #expect(transcript.localeIdentifier == "en")
+            #expect(await engine.trackCallCount == 4)
         }
     }
 
@@ -538,12 +820,13 @@ struct TranscriptionPipelineTests {
             let handle = try await session(in: root)
             let engine = StubEngine(detectedLanguage: "en")
 
-            try await TranscriptionPipeline(engine: engine).transcribe(
+            let transcript = try await TranscriptionPipeline(engine: engine).transcribe(
                 session: handle, language: .fixed("es-CL"), progress: { _ in }
             )
 
             #expect(await engine.requestedLanguages.allSatisfy { $0 == .fixed("es-CL") })
             #expect(await handle.manifest.resolvedLocaleIdentifier == "es-CL")
+            #expect(transcript.localeIdentifier == "es-CL")
         }
     }
 
@@ -561,64 +844,9 @@ struct TranscriptionPipelineTests {
                 session: handle, language: .automatic, progress: { _ in }
             )
 
-            // Without carrying the resolved language into the second run, every chunk stored
+            // Without carrying the resolved language into the second run, every batch stored
             // under `en` would be compared against a nil identifier and redone from scratch.
-            #expect(await engine.transcribeCallCount == 3)
-        }
-    }
-
-    @Test("a language the app does not support never pins the run")
-    func unsupportedDetectionNeverPins() async throws {
-        // 2026-09-15. Whisper read a microphone that had recorded a listener as Ukrainian,
-        // the first chunk pinned the session to `uk`, and a meeting held in English came back
-        // in Cyrillic. The app offers Spanish and English; a third answer is a misread.
-        try await withTemporaryRoot { root in
-            let handle = try await session(in: root)
-            let engine = StubEngine(detectedLanguage: "uk")
-
-            try await TranscriptionPipeline(engine: engine).transcribe(
-                session: handle, language: .automatic, progress: { _ in }
-            )
-
-            #expect(await engine.requestedLanguages.allSatisfy { $0 == .automatic })
-            #expect(await handle.manifest.resolvedLocaleIdentifier == nil)
-        }
-    }
-
-    @Test("a chunk that decoded silence does not get to name the language")
-    func decodedSilenceNeverPins() async throws {
-        // The other half of the same failure: even a supported language is only a guess when
-        // the audio held nothing. A chunk of thank-yous names whatever the model's subtitle
-        // training data ends with, not what the session is in.
-        try await withTemporaryRoot { root in
-            let handle = try await session(in: root)
-            let engine = StubEngine(
-                detectedLanguage: "en",
-                segmentsForChunk: { url, track in
-                    guard url.lastPathComponent.contains("mic") else {
-                        return [TranscriptSegment(
-                            track: track, start: 0, end: 1, text: "Bueno, arrancamos."
-                        )]
-                    }
-                    return (0 ..< 10).map { index in
-                        TranscriptSegment(
-                            track: track, start: Double(index), end: Double(index) + 1,
-                            text: "Thank you."
-                        )
-                    }
-                }
-            )
-
-            try await TranscriptionPipeline(engine: engine).transcribe(
-                session: handle, language: .automatic, progress: { _ in }
-            )
-
-            // Both mic chunks stayed automatic; the system chunk, which held speech, is the
-            // one that settled it.
-            #expect(
-                await engine.requestedLanguages == [.automatic, .automatic, .automatic]
-            )
-            #expect(await handle.manifest.resolvedLocaleIdentifier == "en")
+            #expect(await engine.trackCallCount == 2)
         }
     }
 
@@ -652,31 +880,6 @@ struct TranscriptionPipelineTests {
 
             #expect(await engine.requestedLanguages.allSatisfy { $0 == .automatic })
             #expect(await handle.manifest.resolvedLocaleIdentifier == nil)
-        }
-    }
-
-    // MARK: - Silence
-
-    @Test("what the model wrote over a silent track does not reach the transcript")
-    func dropsHallucinationsFromChunks() async throws {
-        // Not a remote-engine problem: the same sessions show WhisperKit filling a dead
-        // microphone with "Thank you." chunk after chunk. The count only crosses the
-        // threshold once a track's chunks are put together, which is why the filter runs
-        // here and not inside the engine.
-        try await withTemporaryRoot { root in
-            let handle = try await session(
-                in: root, micChunks: Array(repeating: 16000, count: 10), systemChunks: [16000]
-            )
-            let engine = StubEngine(textForChunk: { url in
-                url.lastPathComponent.contains("mic") ? "Thank you." : "Bueno, arrancamos."
-            })
-
-            let transcript = try await TranscriptionPipeline(engine: engine).transcribe(
-                session: handle, language: language, progress: { _ in }
-            )
-
-            #expect(!transcript.segments.contains { $0.text == "Thank you." })
-            #expect(transcript.segments.contains { $0.text == "Bueno, arrancamos." })
         }
     }
 }
