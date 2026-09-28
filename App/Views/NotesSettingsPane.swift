@@ -49,11 +49,7 @@ struct NotesSettingsPane: View {
                     }
                 }
 
-                Picker("Modelo", selection: $settings.summaryModel) {
-                    ForEach(SummaryModel.allCases) { model in
-                        Text(model.displayName).tag(model)
-                    }
-                }
+                LabeledContent("Modelo", value: SummaryModel.default.displayName)
 
                 Text("La key se guarda en el llavero del sistema, nunca en las preferencias ni en el binario. Es lo único que Tranlix manda a internet, y solo cuando confirmás el envío de una sesión.")
                     .font(.caption)

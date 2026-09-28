@@ -17,9 +17,9 @@ public struct SummaryRequest: Sendable, Equatable {
     ///
     /// It used to be 8,000, and an hour and a half of meeting overran it: the answer came back
     /// cut mid-word and was filed as if it were whole. The ceiling also covers the model's
-    /// thinking, which Opus does by default, so a dense note has less room than it looks.
-    /// 64,000 is the most every offered model accepts; the request streams, so a long
-    /// answer does not run into the HTTP timeout.
+    /// thinking, which Sonnet does by default, so a dense note has less room than it looks.
+    /// 64,000 leaves room for both; the request streams, so a long answer does not run into
+    /// the HTTP timeout.
     public static let defaultMaxTokens = 64000
 
     public init(
@@ -47,29 +47,26 @@ public struct SummaryRequest: Sendable, Equatable {
     public static let warnAboveTokens = 150_000
 }
 
-/// The models offered in Settings.
+/// The model every request goes to.
+///
+/// Sonnet is the only one offered: notes and classification both run on it. A value stored
+/// by an older build ("opus", "haiku") no longer decodes and falls back to the default.
 public enum SummaryModel: String, Sendable, CaseIterable, Identifiable, Codable {
-    case opus
     case sonnet
-    case haiku
 
     public var id: String { rawValue }
 
-    public static let `default` = SummaryModel.opus
+    public static let `default` = SummaryModel.sonnet
 
     public var identifier: String {
         switch self {
-        case .opus: "claude-opus-5"
         case .sonnet: "claude-sonnet-5"
-        case .haiku: "claude-haiku-4-5-20251001"
         }
     }
 
     public var displayName: String {
         switch self {
-        case .opus: "Claude Opus 5 — el mejor, más lento"
-        case .sonnet: "Claude Sonnet 5 — equilibrado"
-        case .haiku: "Claude Haiku 4.5 — el más rápido y barato"
+        case .sonnet: "Claude Sonnet 5"
         }
     }
 }

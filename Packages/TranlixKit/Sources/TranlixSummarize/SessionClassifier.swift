@@ -129,11 +129,10 @@ public struct ModelSessionClassifier: SessionClassifier {
     private let provider: any SummaryProvider
     private let model: String
 
-    /// Always the cheap model by default, whatever the notes are set to. This is a three-way
-    /// choice with the evidence already extracted; the expensive models answer it identically.
+    /// The same model as the notes; it is the only one the app uses.
     public init(
         provider: any SummaryProvider,
-        model: String = SummaryModel.haiku.identifier
+        model: String = SummaryModel.default.identifier
     ) {
         self.provider = provider
         self.model = model

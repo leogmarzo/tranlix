@@ -152,16 +152,14 @@ struct ModelSessionClassifierTests {
         #expect(request.transcript.contains("85"))
     }
 
-    @Test("classifying is done by the cheap model, whatever the notes are set to")
-    func alwaysUsesTheCheapModel() async throws {
-        // Three-way choice with the evidence already extracted. Opus costs thirty times more
-        // for the same answer.
+    @Test("classifying uses the app's only model")
+    func usesTheDefaultModel() async throws {
         let provider = StubProvider(answer: #"{"kind": "lecture", "confidence": 1}"#)
 
         _ = try await ModelSessionClassifier(provider: provider)
             .classify(transcript: "Bueno, arranquemos.", signals: signals)
 
-        #expect(await provider.lastRequest?.model == SummaryModel.haiku.identifier)
+        #expect(await provider.lastRequest?.model == "claude-sonnet-5")
     }
 
     @Test("a transport failure is reported rather than dressed up as a classification")

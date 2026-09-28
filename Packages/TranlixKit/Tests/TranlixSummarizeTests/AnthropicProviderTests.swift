@@ -107,12 +107,12 @@ struct AnthropicProviderTests {
         }
 
         _ = try await sut.summarize(
-            SummaryRequest(instruction: "x", transcript: "y", model: SummaryModel.haiku.identifier)
+            SummaryRequest(instruction: "x", transcript: "y", model: SummaryModel.sonnet.identifier)
         )
 
         let body = try #require(seen.value?.httpBodyData)
         let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
-        #expect(json["model"] as? String == "claude-haiku-4-5-20251001")
+        #expect(json["model"] as? String == "claude-sonnet-5")
     }
 
     @Test("the answer is streamed, with room for a long meeting's notes")
