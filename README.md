@@ -3,16 +3,16 @@
 macOS app that records online classes and meetings, transcribes them with speakers
 separated, and produces notes through an LLM.
 
-Transcription runs on-device (WhisperKit or Apple's SpeechAnalyzer) or remotely, because
-hours of on-device inference can hang a laptop that sleeps mid-run. Two remote engines, for
-two different trades:
+Transcription runs remotely on **DeepInfra** (~US$0.054 per recorded hour), with Whisper
+`large-v3`. Speakers are separated afterwards by the local diarizer (pyannote on CoreML via
+FluidAudio), which is free and runs at roughly 100x real time. Transcription was the
+expensive half in both money and heat, and hours of on-device inference could hang a laptop
+that slept mid-run. Long sessions are uploaded in five-minute batches, each stored the moment
+it lands, so a failed request costs one batch rather than the session.
 
-- **DeepInfra** (~US$0.054 per recorded hour) transcribes with Whisper `large-v3` and leaves
-  speakers to the local diarizer, which is free and runs at roughly 100x real time. This is
-  the default choice: transcription was the expensive half in both money and heat.
-- **AssemblyAI** (~US$0.32 per recorded hour) transcribes *and* separates speakers in one
-  call. Worth it when a session mixes Spanish and English inside a sentence, where Whisper
-  is weaker.
+Earlier versions also offered on-device engines (WhisperKit, Apple's SpeechAnalyzer) and
+AssemblyAI. They were removed; sessions they transcribed still open, and "Volver a
+transcribir" re-runs them through DeepInfra and the local diarizer.
 
 **Governing principle: audio is the source of truth.** The transcript and the summary are
 always derivable and re-runnable, so no recording is ever lost because a later stage failed.
@@ -54,12 +54,12 @@ The bundle id `com.leomarzo.tranlix` and the signing identity are deliberately f
 keys permission grants to that pair, so changing either makes macOS revoke the granted
 permissions on the next build. That is also why the bundle id still spells the app's former
 name: it survived the rename to Translix untouched, along with the keychain services holding
-the Anthropic, AssemblyAI and DeepInfra keys and the notarization profile used by
-`scripts/release.sh`.
+the Anthropic and DeepInfra keys and the notarization profile used by `scripts/release.sh`.
 
 What leaves the machine is explicit and audited: generating notes sends the transcript to
-Anthropic (recorded as `transcriptSharedAt`), and choosing a remote transcription engine
-uploads the recording itself (recorded as `audioSharedAt`). The local engines send nothing.
+Anthropic (recorded as `transcriptSharedAt`), and transcribing uploads the recording itself
+to DeepInfra (recorded as `audioSharedAt`). Every transcribed session sends its audio;
+speaker separation and voice recognition stay on the machine.
 
 ## Layout
 
@@ -71,7 +71,7 @@ Packages/TranslixKit/     all logic, as a local Swift package
   TranslixModel           Codable types; the on-disk contract. A leaf with no dependencies
   TranslixStore           session folders, atomic manifest I/O, library scan, recovery
   TranslixCapture         Core Audio tap + AVAudioEngine mic, chunk writing, coordination
-  TranslixTranscribe      TranscriptionEngine protocol; Apple, WhisperKit, DeepInfra, AssemblyAI
+  TranslixTranscribe      DeepInfra engine, batched upload with retries, hallucination filter
   TranslixDiarize         speaker turns and merge into a single timeline
   TranslixSummarize       Anthropic client, prompt templates, Keychain
   TranslixExport          Markdown rendering
@@ -111,8 +111,8 @@ profiles show a short identifier. The badge counts unresolved name groups and di
 conflicts are resolved. Matching names never cause profiles to be merged or voices to be
 associated automatically.
 
-At least six seconds of usable speech are required. Older recordings and AssemblyAI results
-may require a local analysis pass from retained audio. The transcript's speaker labels remain
+At least six seconds of usable speech are required. Older recordings, including those whose
+speakers came from AssemblyAI, may require a local analysis pass from retained audio. The transcript's speaker labels remain
 unchanged. If analysis fails, the transcript and notes remain available and recognition can
 be retried from the inspector.
 
@@ -131,7 +131,7 @@ survives any failure of the app itself.
   manifest.json          metadata, chunks, markers, speaker names, state
   chunks/                transient CAF chunks, removed once the archive is verified
   audio/                 mic.m4a, system.m4a — AAC mono, roughly 15 MB per hour per track
-  transcripts/           per-chunk results, keyed by engine, so a failure resumes
+  transcripts/           per-batch results, keyed by engine, so a failure resumes
   transcript.json        merged timeline with raw speaker ids
   transcript.md
   notas/                 generated summaries
