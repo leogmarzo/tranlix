@@ -1,9 +1,9 @@
 import Foundation
 import Observation
 import SwiftUI
-import TranslixCapture
-import TranslixModel
-import TranslixStore
+import TranlixCapture
+import TranlixModel
+import TranlixStore
 
 /// Drives the Record screen.
 ///

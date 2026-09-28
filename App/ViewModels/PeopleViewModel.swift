@@ -1,7 +1,7 @@
 import Foundation
 import Observation
-import TranslixModel
-import TranslixStore
+import TranlixModel
+import TranlixStore
 
 /// One current-library snapshot shared by notifications and People settings.
 @MainActor

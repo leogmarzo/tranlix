@@ -1,6 +1,6 @@
 import SwiftUI
-import TranslixModel
-import TranslixStore
+import TranlixModel
+import TranlixStore
 
 /// One session in the sidebar: what it was, how long, and whether it is ready to read.
 struct LibraryRow: View {

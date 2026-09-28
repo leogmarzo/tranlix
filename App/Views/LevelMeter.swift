@@ -11,12 +11,7 @@ import SwiftUI
 /// — 0.34 and 0.67 render identically. Speech sits in the middle of the range, so the icon never
 /// moved. Opacity is continuous and applies to the whole shape, which is what makes it readable.
 ///
-/// Scaled in decibels, over the window the signal actually occupies. Measured across a recording
-/// that transcribed fine, the mic sits at an RMS of 0.006 median and peaks at 0.05 — that is
-/// −44 dB to −26 dB, a 20 dB window. Against the full −60…0 dB range it used to be drawn on, all
-/// of speech landed in the middle third and the indicator never visibly moved, whichever way it
-/// was drawn: the bar hung at half mast and the variable-value symbol froze between its steps.
-/// Clamping to the range that carries the signal is what makes any of those readable.
+/// Scaled in decibels over the window speech occupies; see `AudioLevelScale` for why.
 struct LevelMeter: View {
     let label: String
     let systemImage: String
@@ -27,19 +22,8 @@ struct LevelMeter: View {
     /// view model over several seconds, not from the level below — speech has gaps.
     let isSilent: Bool
 
-    /// Below this the signal is indistinguishable from silence.
-    private let floorDecibels: Double = -50
-
-    /// Above this the indicator is simply "loud". Deliberately far below 0 dB: nothing in a
-    /// recorded voice ever gets near full scale, and a ceiling it cannot reach is range spent on
-    /// nothing. Genuine clipping is caught from the raw level instead, where it belongs.
-    private let ceilingDecibels: Double = -20
-
     private var fraction: Double {
-        guard isActive, level > 0 else { return 0 }
-        let decibels = 20 * log10(Double(level))
-        let span = ceilingDecibels - floorDecibels
-        return min(1, max(0, (decibels - floorDecibels) / span))
+        isActive ? AudioLevelScale.fraction(of: level) : 0
     }
 
     /// Silence never reaches zero: an icon that vanishes reads as a missing track rather than a

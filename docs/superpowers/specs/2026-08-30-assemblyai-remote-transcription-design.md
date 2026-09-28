@@ -1,6 +1,6 @@
 # Remote transcription through AssemblyAI
 
-Translix currently transcribes with WhisperKit and separates voices with FluidAudio, both
+Tranlix currently transcribes with WhisperKit and separates voices with FluidAudio, both
 on-device. A real user reports that transcription freezes the app, and that closing the lid
 mid-processing can hang the whole machine on wake. The cause is structural, not a bug to
 patch: hours of Neural Engine work inside a GUI app, holding a power assertion
@@ -79,7 +79,7 @@ AssemblyAI's routing changes. Upgrading later is a one-string change in the clie
 ### The engine
 
 `EngineID.assemblyAI` (`"assemblyai"`) joins `apple` and `whisperKit`. Three new files in
-`TranslixTranscribe/`:
+`TranlixTranscribe/`:
 
 **`AssemblyAIClient`** — the HTTP surface: upload a file, create a transcript job, poll it.
 An actor holding the base URL, a `@Sendable () -> String?` key provider, and a `URLSession`,
