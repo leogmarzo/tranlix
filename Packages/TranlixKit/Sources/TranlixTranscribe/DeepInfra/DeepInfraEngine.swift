@@ -2,7 +2,7 @@ import Foundation
 import OSLog
 import TranlixModel
 
-/// Whisper `large-v3` running on DeepInfra's servers.
+/// Transcription on DeepInfra's servers, with Whisper `large-v3` or Qwen3-ASR.
 ///
 /// The cheap half of the remote story: it transcribes and nothing else, leaving speakers to
 /// the local diarizer — which is free, already installed, and runs at roughly a hundred times
@@ -15,16 +15,11 @@ import TranlixModel
 /// in under eight seconds and then drew **no response at all** for nine hundred — and because
 /// the whole track was one request, the whole session was lost with it.
 public actor DeepInfraEngine: TranscriptionEngine {
-    public nonisolated let id = EngineID.deepInfra
-    public nonisolated let displayName = "DeepInfra (Whisper large-v3)"
+    public nonisolated let id: EngineID
+    public nonisolated let displayName: String
 
     /// Keychain service holding the API token. Fixed forever: changing it loses the saved key.
     public static let keychainService = "com.leomarzo.tranlix.deepinfra"
-
-    /// The full model rather than `-turbo`: turbo is a pruned distillation that gives up the
-    /// most on languages other than English, and the difference costs about three dollars a
-    /// month at this volume.
-    public static let defaultModel = "openai/whisper-large-v3"
 
     public static let defaultBaseURL = URL(string: "https://api.deepinfra.com")!
 
@@ -46,7 +41,7 @@ public actor DeepInfraEngine: TranscriptionEngine {
     public nonisolated let maxUploadSeconds: Double?
 
     private let apiKey: @Sendable () -> String?
-    private let model: String
+    public nonisolated let model: DeepInfraModel
     private let baseURL: URL
     private let session: URLSession
     private let requestTimeout: TimeInterval
@@ -55,7 +50,7 @@ public actor DeepInfraEngine: TranscriptionEngine {
 
     public init(
         apiKey: @escaping @Sendable () -> String?,
-        model: String = DeepInfraEngine.defaultModel,
+        model: DeepInfraModel = .default,
         baseURL: URL = DeepInfraEngine.defaultBaseURL,
         session: URLSession = .shared,
         maxUploadSeconds: Double = DeepInfraEngine.defaultMaxUploadSeconds,
@@ -65,6 +60,8 @@ public actor DeepInfraEngine: TranscriptionEngine {
     ) {
         self.apiKey = apiKey
         self.model = model
+        self.id = model.engineID
+        self.displayName = "DeepInfra (\(model.displayName))"
         self.baseURL = baseURL
         self.session = session
         self.maxUploadSeconds = maxUploadSeconds
@@ -167,8 +164,8 @@ public actor DeepInfraEngine: TranscriptionEngine {
     ) async throws -> DeepInfraTranscription {
         let diagnosticID = UUID().uuidString
         let started = Date()
-        Self.logger.notice("Request \(diagnosticID, privacy: .public) model=\(self.model, privacy: .public) batch=\(batchName, privacy: .private) attempt=\(attempt)")
-        var request = URLRequest(url: baseURL.appending(path: "v1/inference/\(model)"))
+        Self.logger.notice("Request \(diagnosticID, privacy: .public) model=\(self.model.path, privacy: .public) batch=\(batchName, privacy: .private) attempt=\(attempt)")
+        var request = URLRequest(url: baseURL.appending(path: "v1/inference/\(model.path)"))
         request.httpMethod = "POST"
         // Their own examples spell it lowercase; the header name is case-insensitive but the
         // scheme token is what their gateway matches on.

@@ -16,6 +16,10 @@ public struct EngineID: RawRepresentable, Hashable, Sendable, Codable {
 
     /// Whisper `large-v3` on DeepInfra: transcription only, diarized locally afterwards.
     public static let deepInfra = EngineID(rawValue: "deepinfra")
+
+    /// Qwen3-ASR 1.7B on DeepInfra, the alternative to Whisper. Same request, same local
+    /// diarization; its own id so its cached batches never mix with Whisper's.
+    public static let deepInfraQwen = EngineID(rawValue: "deepinfra-qwen")
 }
 
 /// What language to transcribe in.

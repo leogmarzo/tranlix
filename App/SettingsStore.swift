@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import TranlixModel
 import TranlixSummarize
+import TranlixTranscribe
 
 /// User preferences, kept in `UserDefaults`.
 ///
@@ -16,6 +17,15 @@ final class SettingsStore {
         didSet {
             guard summaryModel != oldValue else { return }
             UserDefaults.standard.set(summaryModel.rawValue, forKey: Self.summaryModelKey)
+        }
+    }
+
+    /// Which DeepInfra model transcribes new recordings. Qwen3-ASR unless changed; a single
+    /// session can still be re-transcribed with the other one from its inspector.
+    var transcriptionModel: DeepInfraModel {
+        didSet {
+            guard transcriptionModel != oldValue else { return }
+            UserDefaults.standard.set(transcriptionModel.rawValue, forKey: Self.transcriptionModelKey)
         }
     }
 
@@ -80,6 +90,7 @@ final class SettingsStore {
     }
 
     private static let summaryModelKey = "summaryModel"
+    private static let transcriptionModelKey = "transcriptionModel"
     private static let templateIDsKey = "notesTemplateIDs"
     private static let notesLanguageKey = "notesLanguage"
     private static let recordingLimitKey = "recordingLimitHours"
@@ -91,6 +102,8 @@ final class SettingsStore {
     init() {
         summaryModel = UserDefaults.standard.string(forKey: Self.summaryModelKey)
             .flatMap(SummaryModel.init(rawValue:)) ?? .default
+        transcriptionModel = UserDefaults.standard.string(forKey: Self.transcriptionModelKey)
+            .flatMap(DeepInfraModel.init(rawValue:)) ?? .default
         notesLanguage = UserDefaults.standard.string(forKey: Self.notesLanguageKey)
             .flatMap(NotesLanguage.init(rawValue:)) ?? .default
         templateIDs = Self.loadTemplateIDs()

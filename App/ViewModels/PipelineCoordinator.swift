@@ -45,14 +45,26 @@ final class PipelineCoordinator {
 
     var isBusy: Bool { !runs.isEmpty }
 
+    /// The model new recordings are transcribed with.
+    var defaultTranscriptionModel: DeepInfraModel { settings.transcriptionModel }
+
     /// Starts a run: the whole chain after a recording, or one stage from the session view.
+    ///
+    /// `model` applies to this run only. Re-transcribing one session with the other model is
+    /// a comparison, not a change of preference, so it never touches the default.
     func start(
         _ handle: SessionHandle,
         stages: Set<PipelineStage> = Set(PipelineStage.allCases),
         force: Bool = false,
-        notesConfirmed: Bool = false
+        notesConfirmed: Bool = false,
+        model: DeepInfraModel? = nil
     ) {
-        Task { await begin(handle, stages: stages, force: force, notesConfirmed: notesConfirmed) }
+        let model = model ?? settings.transcriptionModel
+        Task {
+            await begin(
+                handle, stages: stages, force: force, notesConfirmed: notesConfirmed, model: model
+            )
+        }
     }
 
     /// Cancels a run and waits for it to actually stop.
@@ -71,7 +83,8 @@ final class PipelineCoordinator {
         _ handle: SessionHandle,
         stages: Set<PipelineStage>,
         force: Bool,
-        notesConfirmed: Bool
+        notesConfirmed: Bool,
+        model: DeepInfraModel
     ) async {
         let manifest = await handle.manifest
         let sessionID = manifest.id
@@ -84,7 +97,7 @@ final class PipelineCoordinator {
         // The classifier pins itself to the cheap model, so this does not inherit the setting.
         let provider = AnthropicProvider()
         let pipeline = await SessionPipeline(
-            engine: environment.transcriber,
+            engine: environment.transcriber(model),
             diarizer: environment.diarizer,
             provider: provider,
             classifier: ModelSessionClassifier(provider: provider),

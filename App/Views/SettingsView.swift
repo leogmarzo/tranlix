@@ -15,7 +15,7 @@ struct SettingsView: View {
             GeneralSettings(environment: environment, settings: settings)
                 .tabItem { Label("General", systemImage: "gearshape") }
                 .tag(AppNavigation.SettingsTab.general)
-            TranscriptionSettingsPane(environment: environment)
+            TranscriptionSettingsPane(environment: environment, settings: settings)
                 .tabItem { Label("Transcripción", systemImage: "text.bubble") }
                 .tag(AppNavigation.SettingsTab.transcription)
             NotesSettingsPane(settings: settings)
@@ -100,6 +100,7 @@ private struct GeneralSettings: View {
 
 private struct TranscriptionSettingsPane: View {
     @Bindable var environment: AppEnvironment
+    @Bindable var settings: SettingsStore
 
     @State private var downloadingDiarizer = false
     @State private var downloadFraction: Double = 0
@@ -115,6 +116,15 @@ private struct TranscriptionSettingsPane: View {
     var body: some View {
         Form {
             Section("DeepInfra") {
+                Picker("Modelo", selection: $settings.transcriptionModel) {
+                    ForEach(DeepInfraModel.allCases) { model in
+                        Text(model.displayName).tag(model)
+                    }
+                }
+                Text("Para las grabaciones nuevas. Cada sesión se puede volver a transcribir con el otro modelo desde su panel, sin cambiar este ajuste. Los resultados de cada modelo se guardan por separado.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 if let hint = deepInfraKeyHint {
                     LabeledContent("API key") {
                         HStack {
@@ -141,7 +151,7 @@ private struct TranscriptionSettingsPane: View {
                     }
                 }
 
-                Text("Transcribe con Whisper large-v3 en sus servidores y separa las voces acá, con el modelo local — que es gratis y tarda segundos. Cuesta alrededor de US$ 0,054 por hora grabada (las dos pistas). No usan tu audio para entrenar ni lo guardan en disco.")
+                Text("Transcribe en sus servidores y separa las voces acá, con el modelo local — que es gratis y tarda segundos. Cuesta alrededor de US$ 0,054 por hora grabada (las dos pistas). No usan tu audio para entrenar ni lo guardan en disco.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
