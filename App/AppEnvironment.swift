@@ -20,13 +20,22 @@ final class AppEnvironment {
     let people: PeopleViewModel
     private(set) var coordinator: RecordingCoordinator
 
-    /// The one transcription engine: Whisper large-v3 on DeepInfra.
+    /// One DeepInfra engine per model, built once and shared by every run.
     ///
     /// The key is read from the keychain on every use rather than captured once, so pasting a
     /// key in Settings takes effect without relaunching.
-    let transcriber = DeepInfraEngine(apiKey: {
-        (try? APIKeyStore(service: DeepInfraEngine.keychainService).read()) ?? nil
-    })
+    private let transcribers: [DeepInfraModel: DeepInfraEngine] = Dictionary(
+        uniqueKeysWithValues: DeepInfraModel.allCases.map { model in
+            (model, DeepInfraEngine(apiKey: {
+                (try? APIKeyStore(service: DeepInfraEngine.keychainService).read()) ?? nil
+            }, model: model))
+        }
+    )
+
+    func transcriber(_ model: DeepInfraModel) -> DeepInfraEngine {
+        // Every model is built above, so the fallback is never reached.
+        transcribers[model] ?? DeepInfraEngine(apiKey: { nil }, model: model)
+    }
 
     /// Shared for the same reason, and because the models are cheap enough to keep resident.
     let diarizer = FluidAudioDiarizer()

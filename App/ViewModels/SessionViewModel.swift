@@ -163,14 +163,21 @@ final class SessionViewModel {
 
     /// Diarization is forced along with it: the speakers already on disk belong to the old
     /// transcript, and a session transcribed by AssemblyAI kept its speakers from there.
-    func retranscribe() {
-        run(stages: [.transcription, .diarization], force: true)
+    ///
+    /// `model` is for this session only; nil means the default from Settings.
+    func retranscribe(with model: DeepInfraModel? = nil) {
+        run(stages: [.transcription, .diarization], force: true, model: model)
+    }
+
+    /// The model new recordings use, so the menu can mark it.
+    var defaultTranscriptionModel: DeepInfraModel {
+        environment.pipeline?.defaultTranscriptionModel ?? .default
     }
 
     /// Whether the engine can run right now. A missing key should read as a key that is
     /// missing, next to the button that needs it.
     func transcriberAvailability() async -> EngineAvailability {
-        await environment.transcriber.availability(
+        await environment.transcriber(defaultTranscriptionModel).availability(
             for: (manifest?.language ?? .auto).transcriptionLanguage
         )
     }
@@ -243,7 +250,8 @@ final class SessionViewModel {
     private func run(
         stages: Set<PipelineStage>,
         force: Bool = false,
-        notesConfirmed: Bool = false
+        notesConfirmed: Bool = false,
+        model: DeepInfraModel? = nil
     ) {
         guard let pipeline = environment.pipeline, !isProcessing else { return }
         Task {
@@ -251,7 +259,7 @@ final class SessionViewModel {
                 return
             }
             pipeline.start(
-                handle, stages: stages, force: force, notesConfirmed: notesConfirmed
+                handle, stages: stages, force: force, notesConfirmed: notesConfirmed, model: model
             )
         }
     }

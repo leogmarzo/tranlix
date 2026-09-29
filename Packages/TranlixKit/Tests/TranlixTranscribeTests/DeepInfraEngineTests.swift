@@ -9,7 +9,7 @@ import TranlixTestSupport
 struct DeepInfraEngineTests {
     private func engine(
         key: String? = "di-test-key",
-        model: String = DeepInfraEngine.defaultModel,
+        model: DeepInfraModel = .default,
         requestTimeout: TimeInterval = DeepInfraEngine.defaultRequestTimeout,
         maxAttempts: Int = RemoteRetry.maxAttempts,
         respond: @escaping @Sendable (URLRequest) -> (Int, Data)
@@ -29,7 +29,7 @@ struct DeepInfraEngineTests {
     /// through on every run.
     private func engine(
         key: String? = "di-test-key",
-        model: String = DeepInfraEngine.defaultModel,
+        model: DeepInfraModel = .default,
         requestTimeout: TimeInterval = DeepInfraEngine.defaultRequestTimeout,
         maxAttempts: Int = RemoteRetry.maxAttempts,
         outcome: @escaping @Sendable (URLRequest) -> DeepInfraStubOutcome
@@ -395,9 +395,42 @@ struct DeepInfraEngineTests {
         }
     }
 
+    @Test("Qwen is posted to its own model path")
+    func postsQwenToItsModel() async throws {
+        let seen = Locked<URLRequest?>(nil)
+        let sut = engine(model: .qwen3ASR) { request in
+            seen.withValue { $0 = request }
+            return (200, Self.success)
+        }
+
+        _ = try await sut.transcribe(
+            trackFile: try audioFile(), track: .system, language: .automatic
+        ) { _ in }
+
+        let request = try #require(seen.value)
+        #expect(request.url?.absoluteString.hasSuffix("/v1/inference/Qwen/Qwen3-ASR-1.7B") == true)
+    }
+
+    @Test("Whisper stays the default model")
+    func whisperIsTheDefault() {
+        let sut = engine { _ in (200, Self.success) }
+        #expect(sut.model == .whisperLargeV3)
+        #expect(sut.id == .deepInfra)
+    }
+
+    @Test("each model files its results under its own engine id")
+    func eachModelHasItsOwnID() {
+        #expect(engine(model: .whisperLargeV3) { _ in (200, Self.success) }.id == .deepInfra)
+        #expect(engine(model: .qwen3ASR) { _ in (200, Self.success) }.id == .deepInfraQwen)
+        #expect(DeepInfraModel(engineID: "deepinfra") == .whisperLargeV3)
+        #expect(DeepInfraModel(engineID: "deepinfra-qwen") == .qwen3ASR)
+        #expect(DeepInfraModel(engineID: "whisperkit") == nil)
+    }
+
     @Test("engine ids stay stable, because results are filed under them")
     func engineIDIsStable() {
         #expect(EngineID.deepInfra.rawValue == "deepinfra")
+        #expect(EngineID.deepInfraQwen.rawValue == "deepinfra-qwen")
     }
 }
 

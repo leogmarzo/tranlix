@@ -88,11 +88,18 @@ struct SessionInspector: View {
                     .font(.caption)
             }
 
-            Button("Volver a transcribir") { model.retranscribe() }
-                .controlSize(.small)
-                .disabled(model.isProcessing || !transcriber.isReady)
-                .padding(.top, 4)
-                .task { transcriber = await model.transcriberAvailability() }
+            // A menu rather than a button: the other model is one click away for a session
+            // that came back badly, without changing what new recordings use.
+            Menu("Volver a transcribir") {
+                ForEach(DeepInfraModel.allCases) { option in
+                    Button(retranscribeLabel(for: option)) { model.retranscribe(with: option) }
+                }
+            }
+            .controlSize(.small)
+            .fixedSize()
+            .disabled(model.isProcessing || !transcriber.isReady)
+            .padding(.top, 4)
+            .task { transcriber = await model.transcriberAvailability() }
 
             // Shown rather than hidden: a disabled button with no reason reads as a bug.
             if case let .unsupported(reason) = transcriber {
@@ -103,14 +110,23 @@ struct SessionInspector: View {
         }
     }
 
+    private func retranscribeLabel(for option: DeepInfraModel) -> String {
+        option == model.defaultTranscriptionModel
+            ? "Con \(option.displayName) (por omisión)"
+            : "Con \(option.displayName)"
+    }
+
     /// Which engine produced the transcript on disk.
     ///
     /// The retired engines are still named, because sessions they transcribed are still in
     /// the library and their manifests still say so. Matched on the stored strings, since
     /// the constants for those engines no longer exist.
     private var engineName: String {
-        switch manifest.transcriptionEngine {
-        case EngineID.deepInfra.rawValue: "DeepInfra"
+        if let stored = manifest.transcriptionEngine,
+           let model = DeepInfraModel(engineID: stored) {
+            return "DeepInfra · \(model.displayName)"
+        }
+        return switch manifest.transcriptionEngine {
         case "whisperkit": "Whisper (local, retirado)"
         case "apple": "Apple Speech (retirado)"
         case "assemblyai": "AssemblyAI (retirado)"
