@@ -128,4 +128,41 @@ struct HallucinationFilterTests {
         #expect(result.map(\.id) == [kept.id])
         #expect(result.first?.start == 3)
     }
+
+    // MARK: - Foreign script
+
+    @Test("a segment written only in a script the app does not transcribe is dropped")
+    func dropsForeignScriptSegments() {
+        // Qwen3-ASR writes a listener's "mm-hmm" and "ok" in Chinese. The app only
+        // transcribes Spanish and English, so these are misreads, never speech.
+        let kept = segment("Yeah, I went through this.", at: 10)
+        let result = HallucinationFilter.filtered([
+            segment("嗯。", at: 1), segment("好。", at: 2), segment("あ、前なんですか。", at: 3),
+            segment("Дякую!", at: 4), segment("ว า", at: 5), kept,
+        ])
+
+        #expect(result.map(\.id) == [kept.id])
+    }
+
+    @Test("Latin text with a stray character, accents or no letters at all survives")
+    func keepsLatinAndLetterless() {
+        let segments = [
+            segment("嗯，OK。"),
+            segment("¿Qué pasó con la reunión?"),
+            segment("10."),
+            segment("Straße, façade, niño."),
+        ]
+
+        #expect(HallucinationFilter.filtered(segments).count == segments.count)
+    }
+
+    @Test("many foreign-script fillers do not make a healthy track read as dead")
+    func foreignFillersDoNotTipTheTrack() {
+        // Forty "嗯。" would otherwise be a loop that marks the track dead, and a dead track
+        // also loses its genuine "Yeah." and "Okay.".
+        let speech = [segment("Yeah.", at: 300), segment("Okay.", at: 301), segment("Sure, let's do that.", at: 302)]
+        let result = HallucinationFilter.filtered(repeated("嗯。", times: 40) + speech)
+
+        #expect(result.map(\.id) == speech.map(\.id))
+    }
 }

@@ -86,12 +86,18 @@ public enum HallucinationFilter {
     private static func dropIDs(in segments: [TranscriptSegment]) -> Set<UUID> {
         guard !segments.isEmpty else { return [] }
 
-        var dropped = repetitionDropIDs(in: segments)
+        // Judged first, and kept out of the rules below: forty "嗯。" would otherwise count
+        // as a decoding loop and could tip a healthy track into being treated as dead.
+        let foreign = Set(segments.filter { isForeignScript($0.text) }.map(\.id))
+        let segments = segments.filter { !foreign.contains($0.id) }
+        guard !segments.isEmpty else { return foreign }
+
+        var dropped = repetitionDropIDs(in: segments).union(foreign)
 
         // A track the repetition rule gutted was decoding silence, not speech. The rest of
         // Whisper's silence vocabulary appears there too, a few times each — too rarely for
         // the repetition rule and unmistakable in this company.
-        guard Double(dropped.count) / Double(segments.count) >= deadTrackShare else {
+        guard Double(dropped.subtracting(foreign).count) / Double(segments.count) >= deadTrackShare else {
             return dropped
         }
 
@@ -124,6 +130,35 @@ public enum HallucinationFilter {
             }
         }
         return dropped
+    }
+
+    /// Whether a segment is written entirely outside the Latin alphabet.
+    ///
+    /// The app transcribes Spanish and English, both written in Latin letters, so a segment
+    /// with letters and not one of them Latin is a misread rather than speech. Qwen3-ASR
+    /// writes a listener's "mm-hmm" and "ok" as "嗯。" and "好。" — 116 of them in one
+    /// thirty-minute meeting — and Whisper has written silence as "Дякую!". A segment with
+    /// no letters at all, such as "10.", is left alone: there is nothing to judge it by.
+    static func isForeignScript(_ text: String) -> Bool {
+        var sawLetter = false
+        for scalar in text.unicodeScalars where scalar.properties.isAlphabetic {
+            if isLatin(scalar) { return false }
+            sawLetter = true
+        }
+        return sawLetter
+    }
+
+    private static func isLatin(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.value {
+        case 0x0041...0x005A, 0x0061...0x007A, // Basic Latin
+             0x00AA, 0x00BA, 0x00C0...0x024F,  // Latin-1 Supplement, Extended-A and -B
+             0x1E00...0x1EFF,                  // Latin Extended Additional
+             0x2C60...0x2C7F, 0xA720...0xA7FF, // Latin Extended-C and -D
+             0xFF21...0xFF3A, 0xFF41...0xFF5A: // Fullwidth Latin
+            true
+        default:
+            false
+        }
     }
 
     /// Lowercased, unaccented, stripped of punctuation and collapsed to single spaces, so
