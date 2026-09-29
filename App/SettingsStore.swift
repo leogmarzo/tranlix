@@ -20,7 +20,7 @@ final class SettingsStore {
         }
     }
 
-    /// Which DeepInfra model transcribes new recordings. Whisper unless changed; a single
+    /// Which DeepInfra model transcribes new recordings. Qwen3-ASR unless changed; a single
     /// session can still be re-transcribed with the other one from its inspector.
     var transcriptionModel: DeepInfraModel {
         didSet {

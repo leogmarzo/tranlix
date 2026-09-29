@@ -3,8 +3,9 @@
 macOS app that records online classes and meetings, transcribes them with speakers
 separated, and produces notes through an LLM.
 
-Transcription runs remotely on **DeepInfra** (~US$0.054 per recorded hour), with Whisper
-`large-v3`. Speakers are separated afterwards by the local diarizer (pyannote on CoreML via
+Transcription runs remotely on **DeepInfra** (~US$0.054 per recorded hour), with Qwen3-ASR
+1.7B by default and Whisper `large-v3` as the alternative (Settings → Transcripción → Modelo;
+any session can be re-transcribed with either model from its inspector). Speakers are separated afterwards by the local diarizer (pyannote on CoreML via
 FluidAudio), which is free and runs at roughly 100x real time. Transcription was the
 expensive half in both money and heat, and hours of on-device inference could hang a laptop
 that slept mid-run. Long sessions are uploaded in five-minute batches, each stored the moment

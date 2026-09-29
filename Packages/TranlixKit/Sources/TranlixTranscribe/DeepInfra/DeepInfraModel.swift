@@ -7,17 +7,17 @@ import Foundation
 /// with the other model must not be handed the first model's cached batches as if they were
 /// its own.
 public enum DeepInfraModel: String, CaseIterable, Codable, Sendable, Identifiable {
-    /// The default. The full model rather than `-turbo`: turbo is a pruned distillation that
-    /// gives up the most on languages other than English.
+    /// The alternative. The full model rather than `-turbo`: turbo is a pruned distillation
+    /// that gives up the most on languages other than English.
     case whisperLargeV3 = "openai/whisper-large-v3"
 
-    /// Measured on 2026-09-28 against a thirty-minute English meeting: about three times
-    /// faster per batch at the same price, better on domain vocabulary, and nothing invented
-    /// from silence. It writes short backchannels ("mm-hmm", "ok") in Chinese, which
-    /// `HallucinationFilter` removes.
+    /// The default. Measured on 2026-09-28 against a thirty-minute English meeting: about
+    /// three times faster per batch at the same price, better on domain vocabulary, and
+    /// nothing invented from silence. It writes short backchannels ("mm-hmm", "ok") in
+    /// Chinese, which `HallucinationFilter` removes.
     case qwen3ASR = "Qwen/Qwen3-ASR-1.7B"
 
-    public static let `default`: DeepInfraModel = .whisperLargeV3
+    public static let `default`: DeepInfraModel = .qwen3ASR
 
     public var id: String { rawValue }
 
