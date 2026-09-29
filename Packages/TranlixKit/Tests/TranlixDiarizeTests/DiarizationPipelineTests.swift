@@ -157,6 +157,49 @@ struct DiarizationPipelineTests {
         }
     }
 
+    @Test("a stored result made with other model settings is not reused")
+    func changedSettingsRerunTheModel() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            try await handle.writeTranscript(transcript())
+
+            let turns = [SpeakerTurn(speakerID: "system-1", start: 0, end: 10)]
+            let before = StubDiarizer(turns: turns, configurationID: "fb-0.8")
+            try await DiarizationPipeline(diarizer: before).process(session: handle) { _ in }
+
+            let after = StubDiarizer(turns: turns, configurationID: "fb-0.3")
+            try await DiarizationPipeline(diarizer: after).process(session: handle) { _ in }
+
+            // Same audio, same diarizer, but the old settings are the reason the old turns
+            // were wrong. Reusing them would keep the bug the new settings exist to fix.
+            #expect(await after.runs == 1)
+            #expect(await handle.readDiarization()?.configurationID == "fb-0.3")
+        }
+    }
+
+    @Test("a result stored before settings were recorded is not reused")
+    func unrecordedSettingsRerunTheModel() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(in: root)
+            try await handle.writeTranscript(transcript())
+
+            let diarizer = StubDiarizer(turns: [
+                SpeakerTurn(speakerID: "system-1", start: 0, end: 10),
+            ])
+            let pipeline = DiarizationPipeline(diarizer: diarizer)
+            try await pipeline.process(session: handle) { _ in }
+
+            // What every diarization.json written before this field existed looks like.
+            var legacy = try #require(await handle.readDiarization())
+            legacy.configurationID = nil
+            try await handle.writeDiarization(legacy)
+
+            try await pipeline.process(session: handle) { _ in }
+
+            #expect(await diarizer.runs == 2)
+        }
+    }
+
     @Test("stored turns can be re-applied to a new transcript without the model")
     func reappliesToANewTranscript() async throws {
         try await withTemporaryRoot { root in

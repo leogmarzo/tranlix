@@ -82,6 +82,22 @@ struct VoiceRecognitionServiceTests {
         }
     }
 
+    @Test("cached voice analysis made with other model settings is not reused")
+    func changedSettingsIgnoreCachedVoiceAnalysis() async throws {
+        try await withTemporaryRoot { root in
+            let handle = try await session(root)
+            let profiles = VoiceProfileStore(root: root)
+            let before = StubDiarizer(turns: turns, configurationID: "fb-0.8")
+            _ = try await VoiceRecognitionService(profiles: profiles, diarizer: before).descriptors(session: handle)
+            var changed = turns
+            changed[0].voice?.vector = [0, 1] + Array(repeating: 0, count: 254)
+            let after = StubDiarizer(turns: changed, configurationID: "fb-0.3")
+            let result = try await VoiceRecognitionService(profiles: profiles, diarizer: after).descriptors(session: handle)
+            #expect(await after.runs == 1)
+            #expect(result["system-9"]?.vector.first == 0)
+        }
+    }
+
     @Test("a fresh unknown voice removes a previous automatic assignment")
     func removesStaleAutomaticAssignment() async throws {
         try await withTemporaryRoot { root in

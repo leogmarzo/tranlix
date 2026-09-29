@@ -86,7 +86,7 @@ public actor VoiceRecognitionService {
                 return raw
             }
         } else if let cached = await session.readVoiceAnalysis(), cached.audioFingerprint == fingerprint,
-                  Self.compatible(cached.turns) {
+                  cached.configurationID == diarizer.configurationID, Self.compatible(cached.turns) {
             local = cached.turns
         } else {
             try await diarizer.prepare { progress($0 * 0.1) }
@@ -107,7 +107,8 @@ public actor VoiceRecognitionService {
 
     private func cache(_ turns: [SpeakerTurn], fingerprint: String, session: SessionHandle) async throws {
         try await session.writeVoiceAnalysis(Diarization(diarizerID: diarizer.id.rawValue,
-            generatedAt: Date(), audioFingerprint: fingerprint, turns: turns))
+            configurationID: diarizer.configurationID, generatedAt: Date(),
+            audioFingerprint: fingerprint, turns: turns))
     }
 
     private static func compatible(_ turns: [SpeakerTurn]) -> Bool {

@@ -64,6 +64,7 @@ public actor DiarizationPipeline {
         let diarization: Diarization
         if !force, let cached = await handle.readDiarization(),
            cached.diarizerID == diarizer.id.rawValue,
+           cached.configurationID == diarizer.configurationID,
            cached.audioFingerprint == fingerprint
         {
             diarization = cached
@@ -91,6 +92,7 @@ public actor DiarizationPipeline {
             let offset = manifest.offset(for: .system)
             diarization = Diarization(
                 diarizerID: diarizer.id.rawValue,
+                configurationID: diarizer.configurationID,
                 generatedAt: Date(),
                 audioFingerprint: fingerprint,
                 turns: turns.map {

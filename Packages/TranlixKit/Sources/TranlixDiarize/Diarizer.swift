@@ -56,6 +56,10 @@ public protocol Diarizer: Sendable {
     var id: DiarizerID { get }
     var displayName: String { get }
 
+    /// Identifies the settings the model runs with. A stored result is only reused when it
+    /// was made with the same ones.
+    var configurationID: String { get }
+
     func availability() async -> DiarizerAvailability
 
     /// Downloads and loads whatever the diarizer needs. Safe to call when already prepared.

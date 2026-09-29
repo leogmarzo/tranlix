@@ -6,6 +6,7 @@ import TranlixModel
 public actor StubDiarizer: Diarizer {
     public nonisolated let id = DiarizerID.fluidAudio
     public nonisolated let displayName = "Stub"
+    public nonisolated let configurationID: String
 
     private let turns: [SpeakerTurn]
     private let stubbedAvailability: DiarizerAvailability
@@ -17,9 +18,11 @@ public actor StubDiarizer: Diarizer {
     public init(
         turns: [SpeakerTurn],
         availability: DiarizerAvailability = .ready,
-        failure: DiarizationError? = nil
+        failure: DiarizationError? = nil,
+        configurationID: String = "stub"
     ) {
         self.turns = turns
+        self.configurationID = configurationID
         stubbedAvailability = availability
         self.failure = failure
     }

@@ -53,6 +53,12 @@ public struct Diarization: Codable, Sendable, Equatable {
     /// Which diarizer produced this, so a result from an older model is recognisable as such.
     public var diarizerID: String
 
+    /// The settings the diarizer ran with, as its `configurationID` reported them.
+    ///
+    /// Nil for results written before this was recorded. Changing a setting changes which
+    /// voices get merged, so a result from other settings must not be passed off as current.
+    public var configurationID: String?
+
     public var generatedAt: Date
 
     /// The audio this came from, identified the same way chunk transcripts identify theirs, so
@@ -65,12 +71,14 @@ public struct Diarization: Codable, Sendable, Equatable {
     public init(
         schemaVersion: Int = Diarization.currentSchemaVersion,
         diarizerID: String,
+        configurationID: String? = nil,
         generatedAt: Date,
         audioFingerprint: String,
         turns: [SpeakerTurn]
     ) {
         self.schemaVersion = schemaVersion
         self.diarizerID = diarizerID
+        self.configurationID = configurationID
         self.generatedAt = generatedAt
         self.audioFingerprint = audioFingerprint
         self.turns = turns

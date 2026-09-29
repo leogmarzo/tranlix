@@ -19,6 +19,25 @@ public actor FluidAudioDiarizer: Diarizer {
     public nonisolated let id = DiarizerID.fluidAudio
     public nonisolated let displayName = "FluidAudio (pyannote)"
 
+    /// pyannote community-1's settings, except VBx's `Fb`.
+    ///
+    /// The default of 0.8 weighs the prior towards fewer speakers heavily enough that, on a
+    /// 39-minute call, VBx merged three voices the first clustering pass had cleanly separated
+    /// into one. 0.3 kept them apart and, across the other recordings it was compared on,
+    /// never reported fewer speakers than 0.8 and added no stray short-lived ones.
+    static let configuration = OfflineDiarizerConfig(Fb: 0.3)
+
+    public nonisolated var configurationID: String {
+        Self.configurationID(for: Self.configuration)
+    }
+
+    /// Only the clustering settings, since those are the ones this app sets. A setting added
+    /// to `configuration` later belongs in here too, or old results will pass for new ones.
+    static func configurationID(for config: OfflineDiarizerConfig) -> String {
+        let clustering = config.clustering
+        return "vbx threshold=\(clustering.threshold) fa=\(clustering.warmStartFa) fb=\(clustering.warmStartFb)"
+    }
+
     /// Where the CoreML models are cached.
     ///
     /// Under our own Application Support folder rather than FluidAudio's default, for the same
@@ -153,7 +172,7 @@ public actor FluidAudioDiarizer: Diarizer {
             at: modelsDirectory, withIntermediateDirectories: true
         )
 
-        let created = OfflineDiarizerManager()
+        let created = OfflineDiarizerManager(config: Self.configuration)
         do {
             // Loading is driven here rather than through `prepareModels` so the download can
             // report progress at all: `prepareModels` takes no handler, and a first run that
