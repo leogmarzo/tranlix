@@ -46,6 +46,12 @@ final class ScriptedAudioSource: AudioSource, @unchecked Sendable {
 
     private var scriptedStartError: (any Error)?
 
+    /// Holds every `stop` until released, standing in for a CoreAudio call that never returns.
+    ///
+    /// A group rather than a semaphore because every waiter has to be let go at once, however
+    /// many calls piled up behind the first.
+    private let stopGate = DispatchGroup()
+
     init(track: AudioTrack) {
         self.track = track
     }
@@ -71,10 +77,20 @@ final class ScriptedAudioSource: AudioSource, @unchecked Sendable {
     }
 
     func stop() {
+        stopGate.wait()
         lock.lock()
         sink = nil
         stopCount += 1
         lock.unlock()
+    }
+
+    /// Makes every `stop` from now on block until `releaseStops()`.
+    func hangStops() {
+        stopGate.enter()
+    }
+
+    func releaseStops() {
+        stopGate.leave()
     }
 
     /// Delivers `frames` of a constant-amplitude signal, as the real backends would.

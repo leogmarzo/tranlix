@@ -155,15 +155,25 @@ struct TrackRestartEscalationTests {
             // delivering and the session has a reason to continue.
             sources.mic.startError = CaptureError.engineFailed("sin dispositivo de entrada")
             micFeed.stop()
-            try await waitForAttempts(2, of: sources.mic)
+
+            // Waits for the report rather than for the failed attempt. The attempt runs on the
+            // backend's own queue and the report is written once the coordinator hears back,
+            // so stopping in between ends a session the report no longer belongs to.
+            let deadline = Date().addingTimeInterval(5)
+            var reported = false
+            while Date() < deadline, !reported {
+                reported = await handle.manifest.deviceChanges.contains {
+                    $0.track == .mic && $0.detail.contains("no se pudo reiniciar")
+                }
+                if !reported { try await Task.sleep(for: .milliseconds(5)) }
+            }
+            #expect(reported)
 
             #expect(await recorder.isRecording)
 
             try await recorder.stop()
 
             let manifest = await handle.manifest
-            let stalls = manifest.deviceChanges.filter { $0.track == .mic }
-            #expect(stalls.contains { $0.detail.contains("no se pudo reiniciar") })
             // The half that still works is still working, which is the whole point of not
             // ending the session over one dead track.
             #expect(manifest.track(.system).totalFrames > 0)

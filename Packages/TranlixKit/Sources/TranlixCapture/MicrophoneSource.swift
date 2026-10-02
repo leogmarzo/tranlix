@@ -95,10 +95,10 @@ public final class MicrophoneSource: AudioSource, @unchecked Sendable {
     // MARK: - Lifecycle
 
     public func start(into sink: any AudioSink) throws {
-        // Synchronous on purpose. `RecordingCoordinator.restart` has no suspension point
-        // between stopping a source and starting it again, and that is what keeps a restart
-        // from interleaving with stopping, pausing or finishing the session. An async
-        // `start` would hand that guarantee back.
+        // Synchronous on purpose. The coordinator runs every call into this backend in order,
+        // on a serial queue of its own (`SourceSlot`), and that ordering is what keeps a
+        // restart from interleaving with finishing the session. An async `start` would return
+        // before the work is done and hand that guarantee back.
         try graphQueue.sync {
             do {
                 try buildGraph(into: sink)
