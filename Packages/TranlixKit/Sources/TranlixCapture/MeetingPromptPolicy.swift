@@ -40,6 +40,15 @@ public struct MeetingPromptPolicy: Sendable {
     /// The app the question showing right now is about.
     public private(set) var outstanding: MeetingApp?
 
+    /// The name the question showing right now uses.
+    private var outstandingName = ""
+
+    /// Questions a newer one replaced before they were answered, oldest first, kept while
+    /// their meeting goes on. A browser tab holding the microphone for a few seconds during a
+    /// Zoom call takes the question over; when the tab lets go, the Zoom call is asked about
+    /// again rather than left with no question at all.
+    private var displaced: [(app: MeetingApp, appName: String)] = []
+
     /// Apps whose current meeting was asked about, or was kept quiet by the cooldown, and has
     /// not been recorded.
     private var unanswered: Set<MeetingApp> = []
@@ -69,16 +78,21 @@ public struct MeetingPromptPolicy: Sendable {
             }
             lastUnansweredEnd[app] = nil
             unanswered.insert(app)
-            outstanding = app
-            return .prompt(app, appName: appName)
+            displaced.removeAll { $0.app == app }
+            if let previous = outstanding, previous != app {
+                displaced.append((previous, outstandingName))
+            }
+            return ask(app, appName: appName)
 
         case let .ended(app):
             if unanswered.remove(app) != nil {
                 lastUnansweredEnd[app] = now
             }
+            displaced.removeAll { $0.app == app }
             guard outstanding == app else { return .none }
             outstanding = nil
-            return .withdraw
+            guard canRecord else { return .withdraw }
+            return askDisplaced()
         }
     }
 
@@ -86,20 +100,47 @@ public struct MeetingPromptPolicy: Sendable {
     public mutating func recordingStarted() -> Decision {
         unanswered.removeAll()
         lastUnansweredEnd.removeAll()
+        displaced.removeAll()
         guard outstanding != nil else { return .none }
         outstanding = nil
         return .withdraw
     }
 
-    /// The user answered the question showing, either way. It is gone from the screen.
-    public mutating func promptAnswered() {
+    /// The user took the question up: pressed Grabar, or clicked it to open Tranlix. It is
+    /// gone from the screen, and nothing replaced comes back on top of what they chose.
+    public mutating func promptAccepted() {
         outstanding = nil
     }
 
-    /// The settings changed. A question about an app that is no longer watched comes down.
+    /// The user closed the question: "Ahora no". It is gone from the screen. A question it had
+    /// replaced comes back, because that is a different meeting, still going on.
+    public mutating func promptDismissed() -> Decision {
+        guard outstanding != nil else { return .none }
+        outstanding = nil
+        // The closed question is already off the screen: nothing to take down.
+        guard !displaced.isEmpty else { return .none }
+        return askDisplaced()
+    }
+
+    /// The settings changed. A question about an app that is no longer watched comes down, and
+    /// a question it had replaced about an app still watched comes back in its place.
     public mutating func preferencesChanged(_ preferences: Preferences) -> Decision {
+        displaced.removeAll { !preferences.covers($0.app) }
         guard let outstanding, !preferences.covers(outstanding) else { return .none }
         self.outstanding = nil
-        return .withdraw
+        return askDisplaced()
+    }
+
+    private mutating func ask(_ app: MeetingApp, appName: String) -> Decision {
+        outstanding = app
+        outstandingName = appName
+        return .prompt(app, appName: appName)
+    }
+
+    /// The most recently replaced question, or taking the one showing down when there is none.
+    /// Called with nothing outstanding.
+    private mutating func askDisplaced() -> Decision {
+        guard let next = displaced.popLast() else { return .withdraw }
+        return ask(next.app, appName: next.appName)
     }
 }

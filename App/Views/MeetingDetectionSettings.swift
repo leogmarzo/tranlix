@@ -21,7 +21,7 @@ struct MeetingDetectionSettings: View {
                     .disabled(!settings.autoDetectMeetings)
             }
 
-            Text("Cuando una de estas apps empieza a usar el micrófono, Tranlix te muestra una notificación con el botón Grabar, que arranca la grabación sin abrir la ventana. En el navegador no distingue Meet de otra página que use el micrófono.")
+            Text("Mientras Tranlix está abierto (aunque cierres la ventana), cuando una de estas apps empieza a usar el micrófono te muestra una notificación con el botón Grabar, que arranca la grabación sin abrir la ventana. En el navegador no distingue Meet de otra página que use el micrófono.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -39,7 +39,13 @@ struct MeetingDetectionSettings: View {
                 }
             }
         }
-        .task(id: settings.autoDetectMeetings) { await refreshAuthorization() }
+        .task { await refreshAuthorization() }
+        .onChange(of: settings.autoDetectMeetings) { wasOn, isOn in
+            guard isOn, !wasOn else { return }
+            // Asked when the user switches it on, so the system's question comes while they
+            // are looking at the setting rather than in the middle of their next call.
+            Task { await requestAuthorization() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await refreshAuthorization() }
         }
@@ -63,6 +69,14 @@ struct MeetingDetectionSettings: View {
                 }
             }
         )
+    }
+
+    private func requestAuthorization() async {
+        let center = UNUserNotificationCenter.current()
+        if await center.notificationSettings().authorizationStatus == .notDetermined {
+            _ = try? await center.requestAuthorization(options: [.alert, .sound])
+        }
+        await refreshAuthorization()
     }
 
     private func refreshAuthorization() async {

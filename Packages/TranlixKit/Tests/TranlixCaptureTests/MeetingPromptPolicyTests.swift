@@ -101,7 +101,7 @@ struct MeetingPromptPolicyTests {
     func dismissArmsCooldown() {
         var policy = policy()
         _ = policy.handle(.started(.zoom, appName: "Zoom"), preferences: all, canRecord: true, at: at(0))
-        policy.promptAnswered()
+        _ = policy.promptDismissed()
         #expect(policy.outstanding == nil)
         #expect(policy.handle(.ended(.zoom), preferences: all, canRecord: true, at: at(30)) == MeetingPromptPolicy.Decision.none)
         #expect(policy.handle(.started(.zoom, appName: "Zoom"), preferences: all, canRecord: true, at: at(60)) == MeetingPromptPolicy.Decision.none)
@@ -146,5 +146,101 @@ struct MeetingPromptPolicyTests {
         var policy = policy()
         _ = policy.handle(.started(.zoom, appName: "Zoom"), preferences: all, canRecord: true, at: at(0))
         #expect(policy.preferencesChanged(MeetingPromptPolicy.Preferences(enabled: false, watched: Set(MeetingApp.allCases))) == .withdraw)
+    }
+
+    // MARK: - A question replaced by a newer one
+
+    @Test("a question replaced by a newer one comes back when the newer meeting ends")
+    func displacedReturns() {
+        // A browser tab holding the microphone for a few seconds during a Zoom call must not
+        // cost the Zoom call its question.
+        var policy = policy()
+        _ = policy.handle(.started(.zoom, appName: "Zoom"), preferences: all, canRecord: true, at: at(0))
+        _ = policy.handle(.started(.meet, appName: "Google Chrome"), preferences: all, canRecord: true, at: at(60))
+        #expect(policy.handle(.ended(.meet), preferences: all, canRecord: true, at: at(80)) == .prompt(.zoom, appName: "Zoom"))
+        #expect(policy.outstanding == .zoom)
+        #expect(policy.handle(.ended(.zoom), preferences: all, canRecord: true, at: at(900)) == .withdraw)
+    }
+
+    @Test("a replaced question whose meeting ended first does not come back")
+    func displacedEndedFirst() {
+        var policy = policy()
+        _ = policy.handle(.started(.zoom, appName: "Zoom"), preferences: all, canRecord: true, at: at(0))
+        _ = policy.handle(.started(.meet, appName: "Arc"), preferences: all, canRecord: true, at: at(10))
+        #expect(policy.handle(.ended(.zoom), preferences: all, canRecord: true, at: at(20)) == MeetingPromptPolicy.Decision.none)
+        #expect(policy.handle(.ended(.meet), preferences: all, canRecord: true, at: at(30)) == .withdraw)
+        #expect(policy.outstanding == nil)
+    }
+
+    @Test("the most recently replaced question comes back first")
+    func displacedOrder() {
+        var policy = policy()
+        _ = policy.handle(.started(.zoom, appName: "Zoom"), preferences: all, canRecord: true, at: at(0))
+        _ = policy.handle(.started(.teams, appName: "Microsoft Teams"), preferences: all, canRecord: true, at: at(10))
+        _ = policy.handle(.started(.meet, appName: "Safari"), preferences: all, canRecord: true, at: at(20))
+        #expect(policy.handle(.ended(.meet), preferences: all, canRecord: true, at: at(30)) == .prompt(.teams, appName: "Microsoft Teams"))
+        #expect(policy.handle(.ended(.teams), preferences: all, canRecord: true, at: at(40)) == .prompt(.zoom, appName: "Zoom"))
+    }
+
+    @Test("«Ahora no» on the newer question brings the replaced one back")
+    func dismissReturnsDisplaced() {
+        var policy = policy()
+        #expect(policy.promptDismissed() == MeetingPromptPolicy.Decision.none)
+        _ = policy.handle(.started(.zoom, appName: "Zoom"), preferences: all, canRecord: true, at: at(0))
+        _ = policy.handle(.started(.meet, appName: "Google Chrome"), preferences: all, canRecord: true, at: at(10))
+        #expect(policy.promptDismissed() == .prompt(.zoom, appName: "Zoom"))
+        #expect(policy.outstanding == .zoom)
+        #expect(policy.promptDismissed() == MeetingPromptPolicy.Decision.none)
+        #expect(policy.outstanding == nil)
+    }
+
+    @Test("accepting a question does not bring a replaced one back")
+    func acceptDoesNotReturnDisplaced() {
+        var policy = policy()
+        _ = policy.handle(.started(.zoom, appName: "Zoom"), preferences: all, canRecord: true, at: at(0))
+        _ = policy.handle(.started(.meet, appName: "Google Chrome"), preferences: all, canRecord: true, at: at(10))
+        policy.promptAccepted()
+        #expect(policy.outstanding == nil)
+        #expect(policy.handle(.ended(.meet), preferences: all, canRecord: true, at: at(20)) == MeetingPromptPolicy.Decision.none)
+    }
+
+    @Test("a session starting forgets replaced questions")
+    func recordingForgetsDisplaced() {
+        var policy = policy()
+        _ = policy.handle(.started(.zoom, appName: "Zoom"), preferences: all, canRecord: true, at: at(0))
+        _ = policy.handle(.started(.meet, appName: "Google Chrome"), preferences: all, canRecord: true, at: at(10))
+        #expect(policy.recordingStarted() == .withdraw)
+        #expect(policy.handle(.ended(.meet), preferences: all, canRecord: false, at: at(20)) == MeetingPromptPolicy.Decision.none)
+        #expect(policy.promptDismissed() == MeetingPromptPolicy.Decision.none)
+    }
+
+    @Test("a replaced question does not come back while a session is open")
+    func displacedNotWhileBusy() {
+        var policy = policy()
+        _ = policy.handle(.started(.zoom, appName: "Zoom"), preferences: all, canRecord: true, at: at(0))
+        _ = policy.handle(.started(.meet, appName: "Google Chrome"), preferences: all, canRecord: true, at: at(10))
+        #expect(policy.handle(.ended(.meet), preferences: all, canRecord: false, at: at(20)) == .withdraw)
+        #expect(policy.outstanding == nil)
+    }
+
+    @Test("unticking the app asked about brings back a replaced question about one still ticked")
+    func preferencesReturnDisplaced() {
+        var policy = policy()
+        _ = policy.handle(.started(.zoom, appName: "Zoom"), preferences: all, canRecord: true, at: at(0))
+        _ = policy.handle(.started(.meet, appName: "Google Chrome"), preferences: all, canRecord: true, at: at(10))
+        #expect(policy.preferencesChanged(MeetingPromptPolicy.Preferences(enabled: true, watched: [.zoom])) == .prompt(.zoom, appName: "Zoom"))
+        // And a replaced question about an unticked app is dropped.
+        _ = policy.handle(.started(.teams, appName: "Microsoft Teams"), preferences: all, canRecord: true, at: at(20))
+        _ = policy.preferencesChanged(MeetingPromptPolicy.Preferences(enabled: true, watched: [.teams]))
+        #expect(policy.handle(.ended(.teams), preferences: all, canRecord: true, at: at(30)) == .withdraw)
+    }
+
+    @Test("the same app starting again is not counted as replacing itself")
+    func sameAppDoesNotDisplaceItself() {
+        var policy = policy()
+        _ = policy.handle(.started(.zoom, appName: "Zoom"), preferences: all, canRecord: true, at: at(0))
+        _ = policy.handle(.started(.zoom, appName: "Zoom"), preferences: all, canRecord: true, at: at(5))
+        #expect(policy.handle(.ended(.zoom), preferences: all, canRecord: true, at: at(10)) == .withdraw)
+        #expect(policy.promptDismissed() == MeetingPromptPolicy.Decision.none)
     }
 }

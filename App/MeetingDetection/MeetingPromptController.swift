@@ -20,6 +20,12 @@ final class MeetingPromptController {
     static let failureRequestID = "meeting.start.failed"
     static let recordActionID = "meeting.start.record"
     static let appUserInfoKey = "meetingApp"
+    static let launchUserInfoKey = "launch"
+
+    /// Stamped on every question this run posts. An alert stays on screen after Tranlix quits
+    /// or crashes, and pressing Grabar on it relaunches the app to deliver the answer — for a
+    /// meeting this run never saw, which may be long over.
+    private let launchID = UUID().uuidString
 
     /// Brings the main window forward on the record screen. Installed by the scene, like the
     /// floating recorder's, and used when the body of a notification is clicked.
@@ -125,16 +131,12 @@ final class MeetingPromptController {
             }
         }
 
+        // Switching detection on asks for notification permission from the settings pane
+        // itself, which then knows the answer and can say when it is a no.
         let preferences = settings.meetingPromptPreferences
         if preferences != lastPreferences {
-            let turnedOn = preferences.enabled && !lastPreferences.enabled
             lastPreferences = preferences
             apply(policy.preferencesChanged(preferences))
-            // Asked here when the user switches it on, so the system's question comes while
-            // they are looking at the setting rather than in the middle of their next call.
-            if turnedOn {
-                Task { [notifications] in _ = await notifications.requestAuthorizationIfNeeded() }
-            }
         }
 
         if recorder.isRecording, !wasRecording {
@@ -181,7 +183,7 @@ final class MeetingPromptController {
         content.title = "¿Grabar la reunión?"
         content.body = "\(appName) está usando el micrófono."
         content.categoryIdentifier = Self.categoryID
-        content.userInfo = [Self.appUserInfoKey: app.rawValue]
+        content.userInfo = [Self.appUserInfoKey: app.rawValue, Self.launchUserInfoKey: launchID]
         content.sound = .default
         content.interruptionLevel = .active
         // One identifier for every meeting: a newer question replaces the older one, because
@@ -194,16 +196,27 @@ final class MeetingPromptController {
     // MARK: - Answers
 
     private func handle(_ answer: AppNotifications.Answer) {
+        // A question from an earlier run is about a meeting this run knows nothing of. Grabar
+        // on it opens Tranlix instead of recording; if that meeting is still going on, the
+        // monitor finds it and asks again within seconds.
+        let askedByThisRun = answer.userInfo[Self.launchUserInfoKey] == launchID
+            && policy.outstanding != nil
+
         switch answer.actionIdentifier {
         case Self.recordActionID:
-            policy.promptAnswered()
+            guard askedByThisRun else {
+                openApp?()
+                return
+            }
+            policy.promptAccepted()
             startRecording()
         case UNNotificationDefaultActionIdentifier:
             // The body, not the button: show Tranlix and let them decide there.
-            policy.promptAnswered()
+            if askedByThisRun { policy.promptAccepted() }
             openApp?()
         case UNNotificationDismissActionIdentifier:
-            policy.promptAnswered()
+            guard askedByThisRun else { return }
+            apply(policy.promptDismissed())
         default:
             break
         }

@@ -81,6 +81,8 @@ The detector also exposes `nextDeadline`. The monitor uses it to re-evaluate exa
 - **On `.ended(app)`:** withdraw an outstanding prompt for that app.
 - **When recording starts by any route:** withdraw any outstanding prompt.
 - **One prompt at a time:** a newer prompt replaces the older one, because only one recording can run.
+- **A replaced prompt comes back:** the policy remembers prompts a newer one replaced while their meeting is still going. When the newer meeting ends, or the user closes its prompt with "Ahora no", the most recently replaced one is asked again. Otherwise a browser tab holding the mic for a few seconds during a Zoom call would leave the call with no prompt at all.
+- **Accepting is not dismissing:** pressing Grabar or clicking the body never brings a replaced prompt back on top of what the user chose.
 
 ## User-facing behavior
 
@@ -90,7 +92,9 @@ The detector also exposes `nextDeadline`. The monitor uses it to re-evaluate exa
   - `NSUserNotificationAlertStyle = alert` in Info.plist keeps it on screen until answered. A banner would slide away while the user looks at the call. This also applies to the meeting-end question, which is a question too.
 - **Grabar:** calls `RecorderViewModel.start()` and leaves the title untouched. An empty title is what lets the notes stage name the session from what was said (`SummaryPipeline`, `needsTitle`). A generic "Reunión de Zoom" would replace that. The floating recorder appears as usual if enabled.
 - **Grabar failure:** if starting fails, for example because of a microphone permission or disk space problem, a second notification shows the error. Nobody is looking at the window that would show it.
-- **Permission:** notification permission is requested when a meeting is first detected, or when the user turns the setting on. It is never requested at launch. If permission is denied, Settings shows a warning and a button to open System Settings → Notifications.
+- **Permission:** notification permission is requested when a meeting is first detected, or by the settings pane when the user turns the setting on. It is never requested at launch. If permission is denied, Settings shows a warning and a button to open System Settings → Notifications. The pane re-checks as soon as its own request is answered.
+- **Prompts from an earlier run:** an alert stays on screen after Tranlix quits or crashes. Pressing Grabar on it relaunches the app to deliver the answer, for a meeting this run never saw. Every prompt therefore carries a per-launch token. Grabar on a prompt from another run opens Tranlix instead of recording. If that meeting is still going, the monitor asks again within seconds.
+- **Staying open:** detection only works while the process runs. While detection is on, closing the last window no longer quits Tranlix (`applicationShouldTerminateAfterLastWindowClosed`). This is never hidden, because the Dock icon and the always-present menu bar item stay and both bring the window back. Cmd-Q still quits, and launching at login is out of scope.
 - **Notification shown while Tranlix is frontmost:** `willPresent` returns banner + sound.
 
 ## Components

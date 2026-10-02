@@ -70,6 +70,7 @@ struct TranlixApp: App {
                     delegate.coordinator = environment.coordinator
                     delegate.recorder = recorder
                     delegate.pipeline = environment.pipeline
+                    delegate.settings = settings
                     // Captured here because there is a window now. The action stays valid
                     // later, when there may not be one.
                     menuBar.openMainWindow = { openWindow(id: Self.mainWindowID) }
@@ -95,19 +96,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor var coordinator: RecordingCoordinator?
     @MainActor var recorder: RecorderViewModel?
     @MainActor var pipeline: PipelineCoordinator?
+    @MainActor var settings: SettingsStore?
 
     /// Closing the window during a session must not end the session.
     ///
     /// The menu bar item exists precisely so a recording can outlive the window being put
     /// away, and quitting here would finalize a class the user only meant to get out of the
-    /// way. The same now goes for the chain that runs after it. With neither in flight the
-    /// ordinary rule stands, so the app never quietly becomes a background agent.
+    /// way. The same now goes for the chain that runs after it, and for meeting detection,
+    /// which only works while the process runs. With none of them in play the ordinary rule
+    /// stands. Staying open is never hidden: the Dock icon and the menu bar item stay, and
+    /// both bring the window back.
     @MainActor
     func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
         // Also while the chain is working. Transcribing an hour takes minutes, it starts by
         // itself the moment a recording ends, and quitting halfway leaves the session in
         // `.transcribing` — which the next launch reads as a crash and offers to recover.
-        recorder?.isRecording != true && pipeline?.isBusy != true
+        recorder?.isRecording != true
+            && pipeline?.isBusy != true
+            // Closing the window to get it out of the way must not switch off the offer to
+            // record the next meeting, which is the whole point of the setting.
+            && settings?.autoDetectMeetings != true
     }
 
     @MainActor
