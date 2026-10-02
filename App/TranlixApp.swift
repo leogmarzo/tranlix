@@ -25,6 +25,13 @@ struct TranlixApp: App {
     /// reason as the menu bar item: it outlives the window.
     @State private var floatingRecorder: FloatingRecorderController
 
+    /// The process's one notification delegate. Kept here because the center holds it weakly.
+    @State private var notifications: AppNotifications
+
+    /// Offers to record when a meeting app starts using the microphone. Owned here because it
+    /// has to work with no window open at all.
+    @State private var meetingPrompt: MeetingPromptController
+
     init() {
         // First, before anything resolves a path under Application Support.
         SupportFolderMigration.run()
@@ -41,6 +48,14 @@ struct TranlixApp: App {
         // to reopen a window that was closed.
         floatingRecorder.openApp = { menuBar.goToRecording() }
         _floatingRecorder = State(wrappedValue: floatingRecorder)
+        let notifications = AppNotifications()
+        notifications.becomeDelegate()
+        _notifications = State(wrappedValue: notifications)
+        let meetingPrompt = MeetingPromptController(
+            recorder: recorder, settings: settings, notifications: notifications
+        )
+        meetingPrompt.openApp = { menuBar.goToRecording() }
+        _meetingPrompt = State(wrappedValue: meetingPrompt)
     }
 
     var body: some Scene {
