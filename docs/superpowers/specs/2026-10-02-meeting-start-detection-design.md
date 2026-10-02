@@ -48,7 +48,11 @@ Tranlix's own process is always excluded, both by PID and by bundle id (`com.leo
 
 **Meet is browser-level.** A browser using the microphone is reported as "a meeting in Chrome". Telling Meet apart from another page using the mic would need the tab URL, which means Accessibility or Screen Recording permission. The user chose the cheaper signal. The settings caption says so.
 
-**Change notification.** The probe listens to `kAudioHardwarePropertyProcessObjectList` on the system object, plus `kAudioProcessPropertyIsRunningInput` on each process object. Listeners are re-registered whenever the process list changes. A slow safety poll every 10 seconds covers any notification Core Audio fails to deliver. Each snapshot is cheap: a few dozen property reads.
+**Change notification.** The probe listens to `kAudioHardwarePropertyProcessObjectList` on the system object. On each process object it also listens to `kAudioProcessPropertyDevices` in the input scope, and it re-registers those listeners whenever the process list changes. It does **not** listen to `kAudioProcessPropertyIsRunningInput`, although that is the property it reads.
+
+This was measured on macOS 26 with Chrome opening and closing the microphone. A listener on `IsRunningInput` never fired. The input-scoped device list fired at both the start and the stop.
+
+A slow safety poll every 10 seconds covers any notification Core Audio fails to deliver. With the poll disabled, a live run reported the start 3.2 s after Chrome opened the microphone and the end 8.1 s after it closed it. Those are the two grace periods, plus the 50 ms coalescing window. Each snapshot is cheap: a few dozen property reads.
 
 ## Debouncing
 
