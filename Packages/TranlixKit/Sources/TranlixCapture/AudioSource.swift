@@ -38,6 +38,8 @@ public enum CaptureError: Error, LocalizedError {
     case engineFailed(String)
     case tapFailed(String, status: Int32)
     case unsupportedFormat(String)
+    /// A backend was asked to start or stop and did not return in time. It may never return.
+    case sourceUnresponsive
 
     public var errorDescription: String? {
         switch self {
@@ -51,6 +53,8 @@ public enum CaptureError: Error, LocalizedError {
             "No se pudo iniciar la captura del audio del sistema (\(status)): \(detail)"
         case let .unsupportedFormat(detail):
             "Formato de audio no soportado: \(detail)"
+        case .sourceUnresponsive:
+            "el sistema de audio no respondió a tiempo"
         }
     }
 }

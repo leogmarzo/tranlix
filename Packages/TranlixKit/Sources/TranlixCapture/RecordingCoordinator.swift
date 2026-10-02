@@ -77,6 +77,14 @@ public struct RecordingConfiguration: Sendable {
     /// often would only wake the actor for no reason.
     public var limitCheckInterval: TimeInterval = 1
 
+    /// How long a capture backend gets to start or stop before it is given up on.
+    ///
+    /// Building an audio graph normally takes well under a second, a device storm a little
+    /// more. A backend still busy after this long is assumed stuck inside CoreAudio — which
+    /// has happened, and never came back — and is left behind so the session is not stuck
+    /// with it.
+    public var sourceCallTimeout: TimeInterval = 8
+
     public init() {}
 }
 
@@ -105,7 +113,14 @@ public actor RecordingCoordinator {
 
     private var handle: SessionHandle?
     private var recorders: [AudioTrack: TrackRecorder] = [:]
-    private var sources: [AudioTrack: any AudioSource] = [:]
+    private var sources: [AudioTrack: SourceSlot] = [:]
+
+    /// Backends given up on whose last call may still be stuck, by track.
+    ///
+    /// Kept so that a replacement is only built once the old one has let go. Each new backend
+    /// could hang the same way, and every hung call keeps a thread for good, so building one
+    /// per retry would turn one stuck device into a slow leak for the rest of the session.
+    private var stuck: [AudioTrack: SourceSlot] = [:]
     private var activity: (any NSObjectProtocol)?
     private var diskCheck: Task<Void, Never>?
     private var livenessCheck: Task<Void, Never>?
@@ -191,7 +206,7 @@ public actor RecordingCoordinator {
         var startErrors: [any Error] = []
         for track in AudioTrack.allCases {
             do {
-                try startTrack(track, layout: layout, framesPerChunk: framesPerChunk)
+                try await startTrack(track, layout: layout, framesPerChunk: framesPerChunk)
             } catch {
                 startErrors.append(error)
                 emit(.writeFailed(track, error.localizedDescription))
@@ -219,7 +234,7 @@ public actor RecordingCoordinator {
         _ track: AudioTrack,
         layout: SessionLayout,
         framesPerChunk: Int64
-    ) throws {
+    ) async throws {
         let recorder = try TrackRecorder(
             track: track,
             layout: layout,
@@ -244,21 +259,40 @@ public actor RecordingCoordinator {
             Task { await self?.emit(.writeFailed(track, error.localizedDescription)) }
         }
 
-        let source = try sourceFactory(track, configuration.sampleRate)
-        source.onDeviceChange = { [weak self] detail in
-            Task { await self?.handleDeviceChange(track, detail: detail) }
-        }
+        let slot = try makeSlot(for: track)
 
+        // Registered before starting, so a device change reported while the backend is still
+        // coming up is recognized as this backend's.
         recorder.start()
-        do {
-            try source.start(into: recorder)
-        } catch {
-            recorder.stop()
-            throw error
-        }
-
         recorders[track] = recorder
-        sources[track] = source
+        sources[track] = slot
+
+        let outcome = await slot.run(timeout: configuration.sourceCallTimeout) { source in
+            try source.start(into: recorder)
+        }
+        let failure: (any Error)? = switch outcome {
+        case .finished: nil
+        case let .failed(error): error
+        case .timedOut: CaptureError.sourceUnresponsive
+        }
+        guard let failure else { return }
+
+        if case .timedOut = outcome { slot.abandon() }
+        recorders[track] = nil
+        sources[track] = nil
+        recorder.stop()
+        throw failure
+    }
+
+    /// Builds a backend for `track` and wires its device changes to this session.
+    private func makeSlot(for track: AudioTrack) throws -> SourceSlot {
+        let source = try sourceFactory(track, configuration.sampleRate)
+        let slot = SourceSlot(source: source)
+        source.onDeviceChange = { [weak self, weak slot] detail in
+            let reporter = slot
+            Task { await self?.handleDeviceChange(track, detail: detail, from: reporter) }
+        }
+        return slot
     }
 
     // MARK: - During
@@ -397,7 +431,16 @@ public actor RecordingCoordinator {
     /// The source has already rebuilt itself by the time this runs; all that is left is to
     /// close the chunk in progress so the discontinuity lands on a file boundary, and to note
     /// the event in the manifest so it is not mistaken for a bug when reviewing later.
-    private func handleDeviceChange(_ track: AudioTrack, detail: String) async {
+    ///
+    /// Only from the backend currently recording the track. One that was given up on can
+    /// still report from inside the call it was stuck in, and what it has to say is about a
+    /// graph nobody is listening to any more.
+    private func handleDeviceChange(
+        _ track: AudioTrack,
+        detail: String,
+        from slot: SourceSlot?
+    ) async {
+        guard let slot, sources[track] === slot else { return }
         await recordTrackEvent(track, detail: detail, emitting: .deviceChanged(track, detail))
     }
 
@@ -460,6 +503,9 @@ public actor RecordingCoordinator {
         }
 
         for track in AudioTrack.allCases {
+            // Restarts suspend now, so the session can have ended, or been paused, partway
+            // through this loop.
+            guard isRecording, !isPaused else { return }
             guard let recorder = recorders[track] else { continue }
             // Frames received, not frames written. The writer queue runs at utility priority
             // and is among the first things the system starves when the machine is busy, so
@@ -540,24 +586,62 @@ public actor RecordingCoordinator {
 
     /// Stops and starts one track's backend, reporting nothing.
     ///
-    /// Deliberately free of suspension points between stopping and starting. Everything on
-    /// this actor is serialized against everything else, so leaving no `await` in the middle
-    /// is what guarantees a restart cannot interleave with stopping, pausing or finishing the
-    /// session — and therefore that nothing else is touching the backend's graph while it is
-    /// being rebuilt.
+    /// Both calls run together on the backend's own queue, behind anything already queued
+    /// there and ahead of anything queued later — the session's final stop included. That is
+    /// what keeps a restart from interleaving with ending the session, now that waiting for it
+    /// suspends the actor instead of blocking it.
+    ///
+    /// A backend that does not come back in time is given up on and its track left without
+    /// one; the next restart builds a new backend, once the old one has let go.
     ///
     /// - Returns: why the backend could not be started, or `nil` if it started.
     @discardableResult
     private func restart(_ track: AudioTrack) async -> (any Error)? {
-        guard let recorder = recorders[track], let source = sources[track] else { return nil }
+        guard isRecording, let recorder = recorders[track] else { return nil }
 
-        source.stop()
-        do {
-            try source.start(into: recorder)
-            return nil
-        } catch {
-            return error
+        if let previous = stuck[track] {
+            guard previous.isIdle else { return CaptureError.sourceUnresponsive }
+            stuck[track] = nil
         }
+
+        let slot: SourceSlot
+        if let current = sources[track] {
+            slot = current
+        } else {
+            do {
+                slot = try makeSlot(for: track)
+            } catch {
+                return error
+            }
+            sources[track] = slot
+        }
+
+        let outcome = await slot.run(timeout: configuration.sourceCallTimeout) { source in
+            source.stop()
+            // Given up on while this was stuck in `stop`. Starting now would put a second
+            // backend into a recorder that a replacement may already be writing to.
+            guard !slot.isAbandoned else { return }
+            try source.start(into: recorder)
+        }
+
+        // The session may have ended, or moved to another backend, while this waited.
+        guard sources[track] === slot else { return nil }
+        switch outcome {
+        case .finished:
+            return nil
+        case let .failed(error):
+            return error
+        case .timedOut:
+            abandon(slot, of: track)
+            return CaptureError.sourceUnresponsive
+        }
+    }
+
+    /// Leaves a backend behind, and the track without one until a restart builds another.
+    private func abandon(_ slot: SourceSlot, of track: AudioTrack) {
+        slot.abandon()
+        if sources[track] === slot { sources[track] = nil }
+        stuck[track] = slot
     }
 
     // MARK: - Limit
@@ -711,7 +795,18 @@ public actor RecordingCoordinator {
         stallCounts.removeAll()
         lostTracks.removeAll()
 
-        for source in sources.values { source.stop() }
+        // In parallel and with a deadline: finishing has to work even when a backend does
+        // not, since this is the one way the user has of getting their recording back.
+        let timeout = configuration.sourceCallTimeout
+        await withTaskGroup(of: Void.self) { group in
+            for slot in sources.values {
+                group.addTask {
+                    let outcome = await slot.run(timeout: timeout) { $0.stop() }
+                    if case .timedOut = outcome { slot.abandon() }
+                }
+            }
+        }
+        stuck.removeAll()
         for recorder in recorders.values { recorder.stop() }
 
         if let activity {
