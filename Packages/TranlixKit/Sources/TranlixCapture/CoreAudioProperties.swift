@@ -143,6 +143,65 @@ enum CoreAudioProperties {
         ).count
     }
 
+    // MARK: - Process objects
+
+    /// Every process Core Audio currently has a process object for — those doing audio I/O.
+    /// Empty when the list cannot be read.
+    static func processObjectIDs() -> [AudioObjectID] {
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        var address = address(kAudioHardwarePropertyProcessObjectList)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr,
+              size > 0
+        else { return [] }
+
+        var ids = [AudioObjectID](
+            repeating: AudioObjectID(kAudioObjectUnknown),
+            count: Int(size) / MemoryLayout<AudioObjectID>.size
+        )
+        let status = ids.withUnsafeMutableBytes { buffer in
+            AudioObjectGetPropertyData(system, &address, 0, nil, &size, buffer.baseAddress!)
+        }
+        guard status == noErr else { return [] }
+        // The list can shrink between asking its size and reading it.
+        return Array(ids.prefix(Int(size) / MemoryLayout<AudioObjectID>.size))
+    }
+
+    static func processPID(_ process: AudioObjectID) -> pid_t? {
+        try? value(
+            kAudioProcessPropertyPID,
+            on: process,
+            default: pid_t(-1),
+            describedAs: "no se pudo leer el pid del proceso"
+        )
+    }
+
+    /// Nil when the process has no bundle id, which daemons and command-line tools do not.
+    static func processBundleID(_ process: AudioObjectID) -> String? {
+        var address = address(kAudioProcessPropertyBundleID)
+        var bundleID: Unmanaged<CFString>? = nil
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        let status = withUnsafeMutablePointer(to: &bundleID) { pointer in
+            AudioObjectGetPropertyData(process, &address, 0, nil, &size, pointer)
+        }
+        // The header says the caller releases it.
+        guard status == noErr, let string = bundleID?.takeRetainedValue() as String?,
+              !string.isEmpty
+        else { return nil }
+        return string
+    }
+
+    /// Whether the process is capturing from an input device right now.
+    static func processIsRunningInput(_ process: AudioObjectID) -> Bool? {
+        guard let running = try? value(
+            kAudioProcessPropertyIsRunningInput,
+            on: process,
+            default: UInt32(0),
+            describedAs: "no se pudo leer si el proceso usa la entrada"
+        ) else { return nil }
+        return running != 0
+    }
+
     /// The format the tap actually delivers.
     ///
     /// Always read rather than assumed: it follows the output device, so it is 48 kHz stereo

@@ -70,6 +70,8 @@ private struct GeneralSettings: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            MeetingDetectionSettings(settings: settings)
         }
         .formStyle(.grouped)
         .task(id: environment.recordingsRoot) { refreshSpace() }
