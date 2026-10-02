@@ -128,19 +128,29 @@ public final class CoreAudioProcessProbe: AudioProcessProbe, @unchecked Sendable
         if status == noErr { listListener = listener }
     }
 
+    /// What an input listener watches: the input devices a process is using.
+    ///
+    /// Not `kAudioProcessPropertyIsRunningInput`, which is what gets *read*. Measured on macOS
+    /// 26 with Chrome opening and closing the microphone: a listener on `IsRunningInput` never
+    /// fires, while one on the input-scoped device list fires at both the start and the stop.
+    /// Without it the stop was only found by the safety poll, up to ten seconds late.
+    private static var inputDevicesAddress: AudioObjectPropertyAddress {
+        CoreAudioProperties.address(kAudioProcessPropertyDevices, scope: kAudioObjectPropertyScopeInput)
+    }
+
     /// Keeps one input listener per process object that exists. `queue` only.
     private func reconcileInputListeners() {
         let objects = Set(CoreAudioProperties.processObjectIDs())
 
         for (object, listener) in inputListeners where !objects.contains(object) {
             // The object is usually gone by now and Core Audio says so; that is fine.
-            var address = CoreAudioProperties.address(kAudioProcessPropertyIsRunningInput)
+            var address = Self.inputDevicesAddress
             AudioObjectRemovePropertyListenerBlock(object, &address, queue, listener)
             inputListeners[object] = nil
         }
 
         for object in objects where inputListeners[object] == nil {
-            var address = CoreAudioProperties.address(kAudioProcessPropertyIsRunningInput)
+            var address = Self.inputDevicesAddress
             let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
                 self?.scheduleNotify()
             }
@@ -160,7 +170,7 @@ public final class CoreAudioProcessProbe: AudioProcessProbe, @unchecked Sendable
             self.listListener = nil
         }
         for (object, listener) in inputListeners {
-            var address = CoreAudioProperties.address(kAudioProcessPropertyIsRunningInput)
+            var address = Self.inputDevicesAddress
             AudioObjectRemovePropertyListenerBlock(object, &address, queue, listener)
         }
         inputListeners.removeAll()
