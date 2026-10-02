@@ -35,7 +35,9 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
     private var categories: [String: UNNotificationCategory] = [:]
     private var handlers: [String: Handler] = [:]
 
-    private static let log = Logger(subsystem: "com.leomarzo.tranlix", category: "notifications")
+    /// Nonisolated because `add`'s completion handler runs off the main actor. `Logger` is
+    /// `Sendable`, so that is safe.
+    private nonisolated static let log = Logger(subsystem: "com.leomarzo.tranlix", category: "notifications")
 
     private var center: UNUserNotificationCenter { .current() }
 
@@ -92,12 +94,13 @@ final class AppNotifications: NSObject, UNUserNotificationCenterDelegate {
     // MARK: - UNUserNotificationCenterDelegate
 
     /// Shown even with Tranlix in front: these are questions, and the window that would
-    /// answer them may be on another screen or behind the call.
+    /// answer them may be on another screen or behind the call. `.list` too, so a question
+    /// that arrives while Tranlix is in front is still in Notification Center afterwards.
     nonisolated func userNotificationCenter(
         _: UNUserNotificationCenter,
         willPresent _: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        [.banner, .sound]
+        [.banner, .list, .sound]
     }
 
     nonisolated func userNotificationCenter(
