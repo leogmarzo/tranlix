@@ -47,6 +47,24 @@ struct SessionPlayerTests {
         #expect(player.currentTime == player.duration)
     }
 
+    @Test("opening a session leaves the output engine idle until something plays")
+    func engineIdlesUntilPlay() throws {
+        let root = scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let layout = try twoTrackSession(in: root, seconds: 2)
+
+        // A running engine keeps an audio IO thread cycling for as long as the session is
+        // open, whether or not anything is audible. It should only run while playing.
+        let player = try SessionPlayer(manifest: manifest(seconds: 2), layout: layout)
+        #expect(!player.isEngineRunning)
+
+        player.play()
+        #expect(player.isEngineRunning)
+
+        player.pause()
+        #expect(!player.isEngineRunning)
+    }
+
     @Test("playing advances the clock and stops itself at the end")
     func playsToTheEnd() async throws {
         let root = scratch()

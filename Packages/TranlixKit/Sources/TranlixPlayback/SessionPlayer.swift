@@ -76,7 +76,11 @@ public final class SessionPlayer {
             files[track] = file
         }
 
+        // Started here so a graph that cannot run fails at open rather than at play, then
+        // paused at once: a running engine keeps the output IO thread cycling for as long as
+        // the session is open, whether or not anything is playing.
         try engine.start()
+        engine.pause()
     }
 
     /// Isolated because the engine is not `Sendable`: tearing down audio hardware has to happen
@@ -128,6 +132,9 @@ public final class SessionPlayer {
     /// Whether this session has any audio to play at all.
     public var hasAudio: Bool { !players.isEmpty }
 
+    /// Whether the output IO is cycling right now. For the tests.
+    var isEngineRunning: Bool { engine.isRunning }
+
     // MARK: - Running
 
     private func startRun(from time: TimeInterval) {
@@ -170,6 +177,9 @@ public final class SessionPlayer {
 
     private func stopRun() {
         for player in players.values { player.stop() }
+        // Paused rather than stopped: the graph stays prepared, so the next run starts
+        // without re-allocating, but the output IO thread goes quiet in between.
+        engine.pause()
         ticker?.cancel()
         ticker = nil
         anchorHostTime = nil

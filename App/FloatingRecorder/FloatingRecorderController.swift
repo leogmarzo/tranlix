@@ -63,7 +63,13 @@ final class FloatingRecorderController {
 
     private func sync() {
         guard recorder.isRecording, settings.showFloatingRecorder else {
-            panel?.orderOut(nil)
+            // Closed and dropped rather than ordered out. A hidden window keeps rendering,
+            // and once the session ended the recording dot's animation kept the main thread
+            // busy for as long as the app ran — around 15% of a core, from the first session
+            // until quit. Rebuilt on the next session; where it was is in `UserDefaults`, so
+            // nothing is lost.
+            panel?.close()
+            panel = nil
             return
         }
 
