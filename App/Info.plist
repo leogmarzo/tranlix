@@ -33,5 +33,12 @@
 	     the Screen Recording permission that ScreenCaptureKit would have required. -->
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>Tranlix graba el audio del sistema para transcribir clases y reuniones.</string>
+
+	<!-- Notifications stay on screen until answered. Tranlix's notifications are questions
+	     ("¿Grabar la reunión?"), and a banner that slides away after five seconds while the
+	     user is looking at their call is the question never asked. Users can still pick
+	     banners in System Settings. -->
+	<key>NSUserNotificationAlertStyle</key>
+	<string>alert</string>
 </dict>
 </plist>

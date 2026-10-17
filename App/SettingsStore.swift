@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import TranlixCapture
 import TranlixModel
 import TranlixSummarize
 import TranlixTranscribe
@@ -89,6 +90,46 @@ final class SettingsStore {
         recordingLimitHours.map { TimeInterval($0) * 3600 }
     }
 
+    // MARK: - Meeting detection
+
+    /// Whether Tranlix offers to record when a meeting app starts using the microphone.
+    ///
+    /// On by default: the meeting nobody remembered to record is the one this is for, and
+    /// the offer is a notification that can be ignored, never a recording started unasked.
+    var autoDetectMeetings: Bool {
+        didSet {
+            guard autoDetectMeetings != oldValue else { return }
+            UserDefaults.standard.set(autoDetectMeetings, forKey: Self.autoDetectMeetingsKey)
+        }
+    }
+
+    /// Which apps' meetings are offered. All of them unless some were unticked.
+    var watchedMeetingApps: Set<MeetingApp> {
+        didSet {
+            guard watchedMeetingApps != oldValue else { return }
+            // Stored as what is left out rather than what is in, so an app added in a later
+            // version starts out watched instead of silently missing.
+            let unwatched = MeetingApp.allCases.filter { !watchedMeetingApps.contains($0) }
+            UserDefaults.standard.set(unwatched.map(\.rawValue), forKey: Self.unwatchedMeetingAppsKey)
+        }
+    }
+
+    /// Both meeting settings, as the prompt policy takes them.
+    var meetingPromptPreferences: MeetingPromptPolicy.Preferences {
+        MeetingPromptPolicy.Preferences(enabled: autoDetectMeetings, watched: watchedMeetingApps)
+    }
+
+    private static let autoDetectMeetingsKey = "autoDetectMeetings"
+    private static let unwatchedMeetingAppsKey = "unwatchedMeetingApps"
+
+    private static func loadWatchedMeetingApps() -> Set<MeetingApp> {
+        let unwatched = (UserDefaults.standard.stringArray(forKey: unwatchedMeetingAppsKey) ?? [])
+            .compactMap(MeetingApp.init(rawValue:))
+        return Set(MeetingApp.allCases).subtracting(unwatched)
+    }
+
+    // MARK: -
+
     private static let summaryModelKey = "summaryModel"
     private static let transcriptionModelKey = "transcriptionModel"
     private static let templateIDsKey = "notesTemplateIDs"
@@ -107,6 +148,9 @@ final class SettingsStore {
         notesLanguage = UserDefaults.standard.string(forKey: Self.notesLanguageKey)
             .flatMap(NotesLanguage.init(rawValue:)) ?? .default
         templateIDs = Self.loadTemplateIDs()
+        autoDetectMeetings = UserDefaults.standard
+            .object(forKey: Self.autoDetectMeetingsKey) as? Bool ?? true
+        watchedMeetingApps = Self.loadWatchedMeetingApps()
         recordingLimitHours = Self.loadRecordingLimitHours()
         // Not `bool(forKey:)`: that reads false when nothing was ever stored.
         showFloatingRecorder = UserDefaults.standard
