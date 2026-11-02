@@ -9,6 +9,10 @@ struct LibraryRow: View {
     /// Whether the chain is working on this session right now.
     var isProcessing = false
 
+    /// Whether the heading above already names the day, as it does when the list is filtered
+    /// to one day of the date strip.
+    var showsTimeOnly = false
+
     var body: some View {
         HStack(alignment: .top, spacing: 9) {
             marker
@@ -63,7 +67,7 @@ struct LibraryRow: View {
     /// with no day is a session you cannot place at all, which is what the row was showing.
     private var whenText: String {
         let calendar = Calendar.current
-        if calendar.isDateInToday(summary.createdAt) || calendar.isDateInYesterday(summary.createdAt) {
+        if showsTimeOnly || calendar.isDateInToday(summary.createdAt) || calendar.isDateInYesterday(summary.createdAt) {
             return summary.createdAt.formatted(.dateTime.hour().minute())
         }
         if let weekAgo = calendar.date(byAdding: .day, value: -7, to: Date()),

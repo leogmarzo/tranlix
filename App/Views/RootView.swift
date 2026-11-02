@@ -122,7 +122,13 @@ struct RootView: View {
                     .tag(SidebarSelection.record)
             }
 
-            if library.sessions.isEmpty {
+            Section {
+                DateStrip(recordingDays: library.recordingDays, selectedDay: $library.selectedDay)
+            }
+
+            if let day = library.selectedDay {
+                daySection(day)
+            } else if library.sessions.isEmpty {
                 Section {
                     Text(library.query.isEmpty
                         ? "Todavía no hay sesiones"
@@ -136,14 +142,7 @@ struct RootView: View {
                 ForEach(SessionGrouping.groups(for: library.sessions)) { group in
                     Section(group.title) {
                         ForEach(group.sessions) { summary in
-                            row(summary)
-                                .tag(SidebarSelection.session(summary.id))
-                                .contextMenu {
-                                    Button("Renombrar") { beginRename(summary) }
-                                    Button("Borrar…", role: .destructive) {
-                                        pendingDeletion = summary
-                                    }
-                                }
+                            sessionRow(summary)
                         }
                     }
                 }
@@ -168,11 +167,48 @@ struct RootView: View {
         }
     }
 
+    /// The sessions of the day picked in the date strip, in place of the grouped list.
+    private func daySection(_ day: Date) -> some View {
+        let sessions = library.daySessions
+        return Section {
+            if sessions.isEmpty {
+                // A day with recordings shows nothing only when the search left none of them.
+                Text(!library.query.isEmpty && library.recordingDays.contains(day)
+                    ? "Nada coincide con la búsqueda este día"
+                    : "No hay grabaciones este día")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(sessions) { summary in
+                    sessionRow(summary, showsTimeOnly: true)
+                }
+            }
+        } header: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(DayCalendar.dayTitle(day)) · \(sessions.count == 1 ? "1 grabación" : "\(sessions.count) grabaciones")")
+                Button("Mostrar todas") { library.selectedDay = nil }
+                    .buttonStyle(.link)
+                    .font(.caption)
+            }
+        }
+    }
+
+    private func sessionRow(_ summary: SessionSummary, showsTimeOnly: Bool = false) -> some View {
+        row(summary, showsTimeOnly: showsTimeOnly)
+            .tag(SidebarSelection.session(summary.id))
+            .contextMenu {
+                Button("Renombrar") { beginRename(summary) }
+                Button("Borrar…", role: .destructive) {
+                    pendingDeletion = summary
+                }
+            }
+    }
+
     // MARK: - Renaming
 
     /// A session in the list, or the field that renames it.
     @ViewBuilder
-    private func row(_ summary: SessionSummary) -> some View {
+    private func row(_ summary: SessionSummary, showsTimeOnly: Bool) -> some View {
         if renamingID == summary.id {
             // Seeded with the stored title and only prompted with the displayed one: an
             // untitled session shows its folder name, and offering that as the text to edit
@@ -189,7 +225,8 @@ struct RootView: View {
         } else {
             LibraryRow(
                 summary: summary,
-                isProcessing: environment.pipeline?.isRunning(summary.id) == true
+                isProcessing: environment.pipeline?.isRunning(summary.id) == true,
+                showsTimeOnly: showsTimeOnly
             )
         }
     }
