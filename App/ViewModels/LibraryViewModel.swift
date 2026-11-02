@@ -18,6 +18,26 @@ final class LibraryViewModel {
     /// Interrupted sessions that never captured anything. Only clutter.
     private(set) var remnants: [SessionSummary] = []
 
+    /// Days with at least one recording, each as the start of that day.
+    ///
+    /// Taken from the whole folder rather than from the search results: the date strip marks
+    /// where sessions are, and a dot that vanished while typing would read as a recording gone.
+    private(set) var recordingDays: Set<Date> = []
+
+    /// The day picked in the date strip, as its start. `nil` is the grouped list.
+    var selectedDay: Date?
+
+    /// The picked day's sessions, in the order they happened.
+    ///
+    /// Filtered from `sessions`, so a search narrows the day too. Within one day the morning
+    /// class reads before the evening one, the way the day went, not newest first.
+    var daySessions: [SessionSummary] {
+        guard let selectedDay else { return sessions }
+        return sessions
+            .filter { Calendar.current.isDate($0.createdAt, inSameDayAs: selectedDay) }
+            .sorted { $0.createdAt < $1.createdAt }
+    }
+
     /// What the user typed in the sidebar. Matches titles, speaker names and what was said.
     var query = "" {
         didSet {
@@ -67,6 +87,7 @@ final class LibraryViewModel {
             sessions = query.isEmpty
                 ? all
                 : try await Task.detached(priority: .userInitiated) { try store.search(query) }.value
+            recordingDays = Set(all.map { Calendar.current.startOfDay(for: $0.createdAt) })
             recoverable = all.filter(\.needsRecovery)
             remnants = all.filter(\.isEmptyRemnant)
         } catch {

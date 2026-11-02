@@ -19,3 +19,6 @@ Package.resolved
 
 ## Local overrides
 Local.xcconfig
+
+## Codex mockup runs
+design/mockups/**/.codex/
