@@ -13,9 +13,7 @@ struct NotesPane: View {
         VStack(alignment: .leading, spacing: 16) {
             if let note = model.latestNote {
                 header(note)
-                Text(rendered(model.body(of: note)))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                content(model.body(of: note))
 
                 if model.notes.count > 1 { earlier }
             } else {
@@ -78,15 +76,97 @@ struct NotesPane: View {
 
     /// Markdown, rendered rather than shown as source, with the cited moments made clickable.
     ///
-    /// `AttributedString`'s markdown parser handles inline formatting but not headings or
-    /// lists, so those are left as written: better a heading that reads as `## Temas` than one
-    /// silently swallowed. Timecodes are rewritten as links first, which is what connects the
-    /// note to the audio — a note that says "[01:08]" and cannot take you there is only half
-    /// of the point.
-    private func rendered(_ markdown: String) -> AttributedString {
+    /// `AttributedString`'s markdown parser handles inline formatting only, so the blocks it
+    /// cannot draw — headings and tables — are split out first and drawn here; the text inside
+    /// them still goes through the inline parser. Timecodes are rewritten as links first, which
+    /// is what connects the note to the audio — a note that says "[01:08]" and cannot take you
+    /// there is only half of the point.
+    private func content(_ markdown: String) -> some View {
         let linked = NoteTimecodes.linkingTimecodes(in: markdown, scheme: Self.seekScheme)
-        return (try? AttributedString(
-            markdown: linked,
+        let blocks = NoteBlocks.parse(linked)
+        return VStack(alignment: .leading, spacing: 10) {
+            ForEach(blocks.indices, id: \.self) { index in
+                block(blocks[index])
+            }
+        }
+        .textSelection(.enabled)
+    }
+
+    @ViewBuilder
+    private func block(_ block: NoteBlock) -> some View {
+        switch block {
+        case let .heading(level, text):
+            Text(rendered(text))
+                .font(headingFont(level))
+                .padding(.top, 6)
+        case let .text(text):
+            Text(rendered(text))
+                .fixedSize(horizontal: false, vertical: true)
+        case let .table(header, rows):
+            table(header: header, rows: rows)
+        }
+    }
+
+    private func headingFont(_ level: Int) -> Font {
+        switch level {
+        case ...1: .title3.weight(.semibold)
+        case 2: .headline
+        default: .subheadline.weight(.semibold)
+        }
+    }
+
+    private func table(header: [String], rows: [[String]]) -> some View {
+        let narrow = narrowColumns(header: header, rows: rows)
+        return Grid(alignment: .topLeading, horizontalSpacing: 14, verticalSpacing: 8) {
+            GridRow {
+                ForEach(header.indices, id: \.self) { column in
+                    cell(header[column], weight: .semibold, narrow: narrow.contains(column))
+                }
+            }
+            ForEach(rows.indices, id: \.self) { row in
+                Divider()
+                GridRow {
+                    ForEach(rows[row].indices, id: \.self) { column in
+                        cell(rows[row][column], narrow: narrow.contains(column))
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    /// Columns short enough to never wrap — owners and due dates — so they take only their own
+    /// width and the description column gets the rest. Left to the grid, every column claims
+    /// an even share and the action text wraps beside half-empty ones.
+    private func narrowColumns(header: [String], rows: [[String]]) -> Set<Int> {
+        Set(header.indices.filter { column in
+            ([header] + rows).allSatisfy { row in
+                // Measured as read, not as written: a timecode's link target is long source text.
+                column >= row.count
+                    || rendered(row[column]).characters.count <= Self.narrowCellLength
+            }
+        })
+    }
+
+    private static let narrowCellLength = 32
+
+    /// Wide cells wrap instead of truncating: an action cut off with an ellipsis is not one
+    /// anybody can do.
+    @ViewBuilder
+    private func cell(_ text: String, weight: Font.Weight = .regular, narrow: Bool) -> some View {
+        let label = Text(rendered(text)).fontWeight(weight)
+        if narrow {
+            label.fixedSize()
+        } else {
+            label.fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func rendered(_ markdown: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: markdown,
             options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         )) ?? AttributedString(markdown)
     }
