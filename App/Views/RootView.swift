@@ -39,6 +39,18 @@ struct RootView: View {
             detail
         }
         .toolbar {
+            // Here rather than in the sidebar's toolbar: the sidebar can be restored narrower
+            // than its declared minimum, and below ~185 pt the button no longer fits next to
+            // the window controls. AppKit then moves it in and out of the overflow menu on
+            // every frame — 100% CPU with the app sitting idle.
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    Task { await library.refresh() }
+                } label: {
+                    Label("Actualizar", systemImage: "arrow.clockwise")
+                }
+                .help("Volver a escanear la carpeta de grabaciones")
+            }
             ToolbarItem(placement: .primaryAction) { PeopleNotificationsButton(environment: environment) }
         }
         .task(id: environment.recordingsRoot) { await environment.people.refresh() }
@@ -157,14 +169,6 @@ struct RootView: View {
             placement: .sidebar,
             prompt: "Buscar en todas las sesiones"
         )
-        .toolbar {
-            Button {
-                Task { await library.refresh() }
-            } label: {
-                Label("Actualizar", systemImage: "arrow.clockwise")
-            }
-            .help("Volver a escanear la carpeta de grabaciones")
-        }
     }
 
     /// The sessions of the day picked in the date strip, in place of the grouped list.
